@@ -287,7 +287,7 @@ fn main() {
         })
         .insert(Velocity(2.0, 2.0));
 
-    const TO_SPAWN: usize = 10 / 5;
+    const TO_SPAWN: usize = 20_000_000 / 5;
 
     (0..TO_SPAWN).for_each(|i| {
         world.spawn(SpriteBundle {
