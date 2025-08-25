@@ -5,16 +5,16 @@ use bevy_ecs::{
     component::Component,
     entity::Entity,
     event::{Event, EventReader, EventWriter, Events},
-    query::{Added, Changed, Or, With, Without},
+    query::{Changed, With, Without},
     resource::Resource,
-    schedule::{IntoScheduleConfigs, SystemSet},
+    schedule::IntoScheduleConfigs,
     system::{Commands, Query, Res, ResMut, Single},
     world::World,
 };
 use rayon::prelude::*;
 use rustyray::prelude::{
-    Camera2D, Color, ColorPallete, ConfigFlag, OwnedRenderTexture, OwnedTexture, Rectangle,
-    Vector2, Vector2i, Window, WindowBuilder,
+    Camera2D, Color, ConfigFlag, OwnedRenderTexture, OwnedTexture, Rectangle, Vector2, Vector2i,
+    Window, WindowBuilder,
 };
 
 use crate::spatial_hash::SpatialHash;
@@ -47,33 +47,24 @@ impl Drop for WindowResource {
 #[derive(Resource, Default)]
 struct LayerTextures(HashMap<u32, OwnedRenderTexture>);
 
+#[allow(dead_code)]
 enum SpriteKind {
-    Rectangle {
-        size: (f32, f32),
-        color: Color,
-        lines: bool,
-    },
-    Circle {
-        radius: f32,
-        color: Color,
-    },
-    Texture {
-        texture: OwnedTexture,
-        color: Color,
-    },
+    Rectangle { size: (f32, f32), lines: bool },
+    Circle { radius: f32 },
+    Texture { texture: OwnedTexture },
 }
 
 impl Default for SpriteKind {
     fn default() -> Self {
         Self::Rectangle {
             size: (32.0, 32.0),
-            color: Color::GREEN,
             lines: false,
         }
     }
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 enum SpriteOrigin {
     TopLeft,
     Top,
@@ -88,10 +79,21 @@ enum SpriteOrigin {
     Custom(Vector2),
 }
 
-#[derive(Component, Default)]
+#[derive(Component)]
 struct Sprite {
     kind: SpriteKind,
     origin: SpriteOrigin,
+    color: Color,
+}
+
+impl Default for Sprite {
+    fn default() -> Self {
+        Self {
+            kind: SpriteKind::default(),
+            origin: SpriteOrigin::default(),
+            color: Color::GREEN,
+        }
+    }
 }
 
 impl Sprite {
@@ -158,12 +160,6 @@ struct SpriteBundle {
     layer: Layer,
 }
 
-#[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
-struct SetGroupMovement;
-
-#[derive(SystemSet, Clone, Copy, Debug, Hash, PartialEq, Eq)]
-struct SetGroupPhysics;
-
 #[derive(Resource)]
 struct WindowSize(Vector2i);
 
@@ -178,6 +174,9 @@ struct Time {
     delta: f32,
     accumulator: f32,
 }
+
+#[derive(Component, Default)]
+struct Velocity(f32, f32);
 
 impl Time {
     pub fn new(framerate: f32) -> Self {
@@ -232,10 +231,7 @@ fn main() {
     let mut render_schedule = bevy_ecs::schedule::Schedule::default();
     render_schedule.set_executor_kind(bevy_ecs::schedule::ExecutorKind::SingleThreaded);
     render_schedule.add_systems((update_render_textures_size_system, render_system));
-    physics_update_schedule.add_systems((
-        move_player_system.in_set(SetGroupMovement),
-        // player_collision_system.in_set(SetGroupPhysics),
-    ));
+    physics_update_schedule.add_systems((move_player_system, player_collision_system).chain());
     update_schedule.add_systems((
         move_camera_to_target_system,
         update_count_text_system,
@@ -244,14 +240,11 @@ fn main() {
         update_spatial_hash_system,
         update_on_screen_system.after(update_spatial_hash_system),
     ));
-    physics_update_schedule.configure_sets(SetGroupMovement.before(SetGroupPhysics));
 
     world.spawn(SpriteBundle {
         sprite: Sprite {
-            kind: SpriteKind::Circle {
-                radius: 2.0,
-                color: Color::GREEN,
-            },
+            kind: SpriteKind::Circle { radius: 2.0 },
+            color: Color::GREEN,
             ..Default::default()
         },
         transform: Transform {
@@ -266,9 +259,9 @@ fn main() {
             sprite: Sprite {
                 kind: SpriteKind::Rectangle {
                     size: (32.0, 32.0),
-                    color: Color::RED,
                     lines: false,
                 },
+                color: Color::RED,
                 origin: SpriteOrigin::Custom(Vector2::new(0.5, 0.75)),
             },
             transform: Transform {
@@ -277,21 +270,24 @@ fn main() {
             },
             ..Default::default()
         },
+        Velocity::default(),
         Player,
         OnScreen,
         CameraTarget,
     ));
 
-    world.spawn(SpriteBundle {
-        transform: Transform {
-            position: Vector2 { x: 0., y: 100. },
-            scale: Vector2 { x: 40.0, y: 1.0 },
+    world
+        .spawn(SpriteBundle {
+            transform: Transform {
+                position: Vector2 { x: 0., y: 100. },
+                scale: Vector2 { x: 40.0, y: 1.0 },
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    });
+        })
+        .insert(Velocity(2.0, 2.0));
 
-    const TO_SPAWN: usize = 100_000 / 5;
+    const TO_SPAWN: usize = 10 / 5;
 
     (0..TO_SPAWN).for_each(|i| {
         world.spawn(SpriteBundle {
@@ -414,10 +410,8 @@ fn main() {
 fn move_player_system(
     window: Res<WindowResource>,
     time: Res<Time>,
-    mut player: Query<&mut Transform, With<Player>>,
-    mut camera: Query<&mut Camera, With<ActiveCamera>>,
+    mut velocity: Single<&mut Velocity, With<Player>>,
 ) {
-    let mut transform = player.single_mut().unwrap();
     let move_left = window.0.is_key_down(rustyray::prelude::KeyboardKey::A);
     let move_right = window.0.is_key_down(rustyray::prelude::KeyboardKey::D);
     let move_up = window.0.is_key_down(rustyray::prelude::KeyboardKey::W);
@@ -438,72 +432,188 @@ fn move_player_system(
         dir.y += 1.0;
     }
 
-    transform.position += dir.normalized() * SPEED * time.delta();
-
-    camera.single_mut().unwrap().0.target = transform.position;
+    let m = dir.normalized() * SPEED * time.delta();
+    velocity.0 = m.x;
+    velocity.1 = m.y;
 }
 
+#[allow(clippy::type_complexity)]
 fn player_collision_system(
-    mut player: Query<(&Sprite, &mut Transform), With<Player>>,
-    mut others: Query<(&mut Sprite, &Transform), (With<OnScreen>, Without<Player>)>,
+    mut movers: Query<(Entity, &Sprite, &mut Transform, &Velocity)>,
+    mut others: Query<(&mut Sprite, &Transform), (With<OnScreen>, Without<Velocity>)>,
 ) {
-    let (sprite, mut transform) = player.single_mut().unwrap();
     // Record how much time this took
-    let _start = std::time::Instant::now();
-    let mut source_rect = match sprite.kind {
-        SpriteKind::Rectangle { size: shape, .. } => Rectangle {
-            x: transform.position.x,
-            y: transform.position.y,
-            width: shape.0 * transform.scale.x,
-            height: shape.1 * transform.scale.y,
-        },
-        _ => return,
-    };
+    let start = std::time::Instant::now();
 
-    others.iter_mut().for_each(|(mut sprite, other_transform)| {
-        if let SpriteKind::Rectangle { size, color, .. } = &mut sprite.kind {
-            let rect = Rectangle {
-                x: other_transform.position.x,
-                y: other_transform.position.y,
-                width: size.0 * other_transform.scale.x,
-                height: size.1 * other_transform.scale.y,
-            };
-            let collision = source_rect.get_collision_rect(&rect);
-            if collision.width > 0.0 && collision.height > 0.0 {
-                let delta_x =
-                    (source_rect.x + source_rect.width / 2.0) - (rect.x + rect.width / 2.0);
-                let delta_y =
-                    (source_rect.y + source_rect.height / 2.0) - (rect.y + rect.height / 2.0);
-
-                let intersect_x = (source_rect.width + rect.width) / 2.0 - delta_x.abs();
-                let intersect_y = (source_rect.height + rect.height) / 2.0 - delta_y.abs();
-
-                // Move the transform along the axis of least penetration
-                if intersect_x < intersect_y {
-                    source_rect.x += if delta_x > 0.0 {
-                        intersect_x
-                    } else {
-                        -intersect_x
-                    };
-                } else {
-                    source_rect.y += if delta_y > 0.0 {
-                        intersect_y
-                    } else {
-                        -intersect_y
-                    };
-                }
-                *color = Color::YELLOW;
+    // Precompute all movers rects
+    let mut movers_rects: Vec<_> = movers
+        .iter()
+        .filter_map(|(m_entity, s, t, ..)| {
+            if let SpriteKind::Rectangle { size, .. } = s.kind {
+                let mut r = Rectangle {
+                    x: t.position.x,
+                    y: t.position.y,
+                    width: size.0 * t.scale.x,
+                    height: size.1 * t.scale.y,
+                };
+                let o = s.get_origin_vector();
+                r.x -= r.width * o.x;
+                r.y -= r.height * o.y;
+                Some((m_entity, r))
             } else {
-                *color = Color::GREEN;
+                None
+            }
+        })
+        .collect();
+
+    let other_rects: Vec<_> = others
+        .iter_mut()
+        .filter_map(|(s, t)| {
+            if let SpriteKind::Rectangle { size, .. } = s.kind {
+                let mut r = Rectangle {
+                    x: t.position.x,
+                    y: t.position.y,
+                    width: size.0 * t.scale.x,
+                    height: size.1 * t.scale.y,
+                };
+                let o = s.get_origin_vector();
+                r.x -= r.width * o.x;
+                r.y -= r.height * o.y;
+                Some(r)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for (p_entity, sprite, mut transform, velocity) in &mut movers {
+        let origin = sprite.get_origin_vector();
+
+        let Some(mut player_rect) = movers_rects
+            .iter_mut()
+            .find(|item| item.0 == p_entity)
+            .map(|v| v.1)
+        else {
+            continue;
+        };
+
+        if velocity.0 != 0.0 || velocity.1 != 0.0 {
+            player_rect.x += velocity.0;
+            for other in other_rects.iter() {
+                if player_rect.collides_rect(other) {
+                    if velocity.0 > 0.0 {
+                        player_rect.x = other.x - player_rect.width; // stop right before left wall
+                    } else if velocity.0 < 0.0 {
+                        player_rect.x = other.x + other.width; // stop right before right wall
+                    }
+                }
+            }
+
+            for (m_entity, other) in movers_rects.iter() {
+                if *m_entity == p_entity {
+                    continue;
+                }
+                if player_rect.collides_rect(other) {
+                    if velocity.0 > 0.0 {
+                        player_rect.x = other.x - player_rect.width; // stop right before left wall
+                    } else if velocity.0 < 0.0 {
+                        player_rect.x = other.x + other.width; // stop right before right wall
+                    }
+                }
+            }
+
+            player_rect.y += velocity.1;
+            for other in other_rects.iter() {
+                if player_rect.collides_rect(other) {
+                    if velocity.1 > 0.0 {
+                        player_rect.y = other.y - player_rect.height; // stop above floor
+                    } else if velocity.1 < 0.0 {
+                        player_rect.y = other.y + other.height; // stop below ceiling
+                    }
+                }
+            }
+
+            for (m_entity, other) in movers_rects.iter() {
+                if *m_entity == p_entity {
+                    continue;
+                }
+                if player_rect.collides_rect(other) {
+                    if velocity.1 > 0.0 {
+                        player_rect.y = other.y - player_rect.height; // stop above floor
+                    } else if velocity.1 < 0.0 {
+                        player_rect.y = other.y + other.height; // stop below ceiling
+                    }
+                }
+            }
+        } else {
+            for other in other_rects.iter() {
+                if player_rect.collides_rect(other) {
+                    // Compute overlap along X and Y
+                    let delta_x =
+                        (player_rect.x + player_rect.width / 2.0) - (other.x + other.width / 2.0);
+                    let delta_y =
+                        (player_rect.y + player_rect.height / 2.0) - (other.y + other.height / 2.0);
+                    let intersect_x = (player_rect.width + other.width) / 2.0 - delta_x.abs();
+                    let intersect_y = (player_rect.height + other.height) / 2.0 - delta_y.abs();
+
+                    // Only push along the axis of least penetration
+                    if intersect_x < intersect_y {
+                        // X axis
+                        if delta_x > 0.0 {
+                            player_rect.x += intersect_x;
+                        } else {
+                            player_rect.x -= intersect_x;
+                        }
+                    } else {
+                        // Y axis
+                        if delta_y > 0.0 {
+                            player_rect.y += intersect_y;
+                        } else {
+                            player_rect.y -= intersect_y;
+                        }
+                    }
+                }
+            }
+            for (o_entity, other) in movers_rects.iter() {
+                if *o_entity == p_entity {
+                    continue;
+                }
+                if player_rect.collides_rect(other) {
+                    // Compute overlap along X and Y
+                    let delta_x =
+                        (player_rect.x + player_rect.width / 2.0) - (other.x + other.width / 2.0);
+                    let delta_y =
+                        (player_rect.y + player_rect.height / 2.0) - (other.y + other.height / 2.0);
+                    let intersect_x = (player_rect.width + other.width) / 2.0 - delta_x.abs();
+                    let intersect_y = (player_rect.height + other.height) / 2.0 - delta_y.abs();
+
+                    // Only push along the axis of least penetration
+                    if intersect_x < intersect_y {
+                        // X axis
+                        if delta_x > 0.0 {
+                            player_rect.x += intersect_x;
+                        } else {
+                            player_rect.x -= intersect_x;
+                        }
+                    } else {
+                        // Y axis
+                        if delta_y > 0.0 {
+                            player_rect.y += intersect_y;
+                        } else {
+                            player_rect.y -= intersect_y;
+                        }
+                    }
+                }
             }
         }
-    });
 
-    transform.position.x = source_rect.x;
-    transform.position.y = source_rect.y;
+        // Update the actual position based on resolved rectangle
+        transform.position.x = player_rect.x + player_rect.width * origin.x;
+        transform.position.y = player_rect.y + player_rect.height * origin.y;
+    }
 
-    // let duration = start.elapsed();
-    // println!("Collision detection took: {duration:?}");
+    let duration = start.elapsed();
+    println!("Collision detection took: {duration:?}");
 }
 
 fn move_camera_to_target_system(
@@ -582,6 +692,7 @@ fn update_render_textures_size_system(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn update_spatial_hash_system(
     mut spatial_hash: ResMut<SpatialHash>,
     query: Query<(Entity, &Sprite, &Transform), (Without<Player>, Changed<Transform>)>,
@@ -692,7 +803,7 @@ fn render_layers(
             let _ch = d.begin_mode_2d(camera.0);
             for (sprite, transform) in sprites.iter() {
                 match &sprite.kind {
-                    SpriteKind::Rectangle { size, color, lines } => {
+                    SpriteKind::Rectangle { size, lines } => {
                         let origin = sprite.get_origin_vector();
                         let mut dest = Rectangle {
                             x: transform.position.x,
@@ -701,25 +812,30 @@ fn render_layers(
                             height: size.1 * transform.scale.y,
                         };
                         if *lines {
-                            dest.x = dest.x - dest.width * origin.x;
-                            dest.y = dest.y - dest.height * origin.y;
-                            d.draw_rect_lines(dest, *color);
+                            dest.x -= dest.width * origin.x;
+                            dest.y -= dest.height * origin.y;
+                            d.draw_rect_lines(dest, sprite.color);
                         } else {
-                            d.draw_rect_pro(dest, origin * dest.size(), transform.rotation, *color);
+                            d.draw_rect_pro(
+                                dest,
+                                origin * dest.size(),
+                                transform.rotation,
+                                sprite.color,
+                            );
                         }
                         d.draw_circle(transform.position, 2.0, Color::BLUE);
                     }
-                    SpriteKind::Circle { radius, color } => {
+                    SpriteKind::Circle { radius } => {
                         d.draw_circle(
                             Vector2 {
                                 x: transform.position.x,
                                 y: transform.position.y,
                             },
                             radius * transform.scale.x,
-                            *color,
+                            sprite.color,
                         );
                     }
-                    SpriteKind::Texture { texture, color } => {
+                    SpriteKind::Texture { texture } => {
                         let size = texture.size();
                         let dest = Rectangle {
                             x: transform.position.x,
@@ -738,7 +854,7 @@ fn render_layers(
                             dest,
                             Vector2 { x: 0.0, y: 0.0 },
                             transform.rotation,
-                            *color,
+                            sprite.color,
                         );
                     }
                 }
