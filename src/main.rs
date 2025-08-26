@@ -5,7 +5,7 @@ use bevy_ecs::{
     component::Component,
     entity::Entity,
     event::{Event, EventReader, EventWriter, Events},
-    query::{Changed, With, Without},
+    query::{With, Without},
     resource::Resource,
     schedule::IntoScheduleConfigs,
     system::{Commands, Query, Res, ResMut, Single},
@@ -178,6 +178,9 @@ struct Time {
 #[derive(Component, Default)]
 struct Velocity(f32, f32);
 
+#[derive(Event)]
+struct UpdateSpatialHash(Entity);
+
 impl Time {
     pub fn new(framerate: f32) -> Self {
         let timestep = 1.0 / framerate;
@@ -230,8 +233,12 @@ fn main() {
     let mut physics_update_schedule = bevy_ecs::schedule::Schedule::default();
     let mut render_schedule = bevy_ecs::schedule::Schedule::default();
     render_schedule.set_executor_kind(bevy_ecs::schedule::ExecutorKind::SingleThreaded);
-    render_schedule.add_systems((update_render_textures_size_system, render_system));
-    physics_update_schedule.add_systems((move_player_system, player_collision_system).chain());
+    render_schedule.add_systems((
+        update_camera_offset,
+        update_render_textures_size_system,
+        render_system,
+    ));
+    physics_update_schedule.add_systems((move_player_system, apply_velocity_system).chain());
     update_schedule.add_systems((
         move_camera_to_target_system,
         update_count_text_system,
@@ -241,138 +248,77 @@ fn main() {
         update_on_screen_system.after(update_spatial_hash_system),
     ));
 
-    world.spawn(SpriteBundle {
-        sprite: Sprite {
-            kind: SpriteKind::Circle { radius: 2.0 },
-            color: Color::GREEN,
-            ..Default::default()
-        },
-        transform: Transform {
-            position: Vector2 { x: 50.0, y: 50.0 },
-            ..Default::default()
-        },
-        ..Default::default()
-    });
+    world.init_resource::<Events<UpdateSpatialHash>>();
+    let mut spawn_events = world
+        .remove_resource::<Events<UpdateSpatialHash>>()
+        .unwrap();
 
-    world.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                kind: SpriteKind::Rectangle {
-                    size: (32.0, 32.0),
-                    lines: false,
+    {
+        let player = world.spawn((
+            SpriteBundle {
+                sprite: Sprite {
+                    kind: SpriteKind::Rectangle {
+                        size: (32.0, 32.0),
+                        lines: false,
+                    },
+                    color: Color::RED,
+                    origin: SpriteOrigin::Custom(Vector2::new(0.5, 0.75)),
                 },
-                color: Color::RED,
-                origin: SpriteOrigin::Custom(Vector2::new(0.5, 0.75)),
-            },
-            transform: Transform {
-                position: Vector2 { x: 50.0, y: 50.0 },
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        Velocity::default(),
-        Player,
-        OnScreen,
-        CameraTarget,
-    ));
-
-    world
-        .spawn(SpriteBundle {
-            transform: Transform {
-                position: Vector2 { x: 0., y: 100. },
-                scale: Vector2 { x: 40.0, y: 1.0 },
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .insert(Velocity(2.0, 2.0));
-
-    const TO_SPAWN: usize = 20_000_000 / 5;
-
-    (0..TO_SPAWN).for_each(|i| {
-        world.spawn(SpriteBundle {
-            sprite: Sprite {
-                origin: SpriteOrigin::Custom((0.5, 0.75).into()),
-                ..Default::default()
-            },
-            transform: Transform {
-                position: Vector2 {
-                    x: 200. + (35 * i) as f32,
-                    y: 100.,
+                transform: Transform {
+                    position: Vector2 { x: 50.0, y: 50.0 },
+                    ..Default::default()
                 },
                 ..Default::default()
             },
-            ..Default::default()
+            Velocity::default(),
+            Player,
+            OnScreen,
+            CameraTarget,
+        ));
+
+        spawn_events.send(UpdateSpatialHash(player.id()));
+    }
+
+    {
+        let platform = world.spawn((
+            SpriteBundle {
+                transform: Transform {
+                    position: Vector2 { x: 0., y: 100. },
+                    scale: Vector2 { x: 40.0, y: 1.0 },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Velocity(2.0, -2.0),
+            OnScreen,
+        ));
+        spawn_events.send(UpdateSpatialHash(platform.id()));
+    }
+
+    const TO_SPAWN: usize = 20_000 / 5;
+
+    (0..5).for_each(|i| {
+        (0..TO_SPAWN).for_each(|j| {
+            let entity = world.spawn(SpriteBundle {
+                sprite: Sprite {
+                    origin: SpriteOrigin::Custom((0.5, 0.75).into()),
+                    ..Default::default()
+                },
+                transform: Transform {
+                    position: Vector2 {
+                        x: 200. + (35 * j) as f32,
+                        y: 500. + (35 * i) as f32,
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+
+            spawn_events.send(UpdateSpatialHash(entity.id()));
         });
     });
 
-    (0..TO_SPAWN).for_each(|i| {
-        world.spawn(SpriteBundle {
-            sprite: Sprite {
-                origin: SpriteOrigin::Custom((0.5, 0.75).into()),
-                ..Default::default()
-            },
-            transform: Transform {
-                position: Vector2 {
-                    x: 200. + (35 * i) as f32,
-                    y: 135.,
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-    });
-
-    (0..TO_SPAWN).for_each(|i| {
-        world.spawn(SpriteBundle {
-            sprite: Sprite {
-                origin: SpriteOrigin::Custom((0.5, 0.75).into()),
-                ..Default::default()
-            },
-            transform: Transform {
-                position: Vector2 {
-                    x: 200. + (35 * i) as f32,
-                    y: 170.,
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-    });
-
-    (0..TO_SPAWN).for_each(|i| {
-        world.spawn(SpriteBundle {
-            sprite: Sprite {
-                origin: SpriteOrigin::Custom((0.5, 0.75).into()),
-                ..Default::default()
-            },
-            transform: Transform {
-                position: Vector2 {
-                    x: 200. + (35 * i) as f32,
-                    y: 205.,
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-    });
-
-    (0..TO_SPAWN).for_each(|i| {
-        world.spawn(SpriteBundle {
-            sprite: Sprite {
-                origin: SpriteOrigin::Custom((0.5, 0.75).into()),
-                ..Default::default()
-            },
-            transform: Transform {
-                position: Vector2 {
-                    x: 200. + (35 * i) as f32,
-                    y: 240.,
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-    });
+    world.insert_resource(spawn_events);
 
     world.spawn((
         Transform::default(),
@@ -418,6 +364,7 @@ fn move_player_system(
     let move_down = window.0.is_key_down(rustyray::prelude::KeyboardKey::S);
 
     const SPEED: f32 = 300.0;
+    const RUN_SPEED: f32 = SPEED * 3.0;
     let mut dir = Vector2::ZERO;
     if move_left {
         dir.x -= 1.0;
@@ -432,13 +379,22 @@ fn move_player_system(
         dir.y += 1.0;
     }
 
-    let m = dir.normalized() * SPEED * time.delta();
+    let m = if window
+        .0
+        .is_key_down(rustyray::prelude::KeyboardKey::LeftShift)
+    {
+        RUN_SPEED
+    } else {
+        SPEED
+    } * dir.normalized()
+        * time.delta();
     velocity.0 = m.x;
     velocity.1 = m.y;
 }
 
 #[allow(clippy::type_complexity)]
-fn player_collision_system(
+fn apply_velocity_system(
+    mut update_spatial_hash: EventWriter<UpdateSpatialHash>,
     mut movers: Query<(Entity, &Sprite, &mut Transform, &Velocity)>,
     mut others: Query<(&mut Sprite, &Transform), (With<OnScreen>, Without<Velocity>)>,
 ) {
@@ -446,9 +402,9 @@ fn player_collision_system(
     let start = std::time::Instant::now();
 
     // Precompute all movers rects
-    let mut movers_rects: Vec<_> = movers
-        .iter()
-        .filter_map(|(m_entity, s, t, ..)| {
+    let mut moving_rects: Vec<_> = movers
+        .iter_mut()
+        .filter_map(|(m_entity, s, t, v)| {
             if let SpriteKind::Rectangle { size, .. } = s.kind {
                 let mut r = Rectangle {
                     x: t.position.x,
@@ -459,14 +415,14 @@ fn player_collision_system(
                 let o = s.get_origin_vector();
                 r.x -= r.width * o.x;
                 r.y -= r.height * o.y;
-                Some((m_entity, r))
+                Some((m_entity, r, s, t, v))
             } else {
                 None
             }
         })
         .collect();
 
-    let other_rects: Vec<_> = others
+    let static_rects: Vec<_> = others
         .iter_mut()
         .filter_map(|(s, t)| {
             if let SpriteKind::Rectangle { size, .. } = s.kind {
@@ -486,75 +442,68 @@ fn player_collision_system(
         })
         .collect();
 
-    for (p_entity, sprite, mut transform, velocity) in &mut movers {
+    for i in 0..moving_rects.len() {
+        let (left, right) = moving_rects.split_at_mut(i);
+        let ((p_entity, player_rect, sprite, transform, velocity), rest) =
+            right.split_first_mut().unwrap();
+        let mut did_move = false;
         let origin = sprite.get_origin_vector();
 
-        let Some(mut player_rect) = movers_rects
-            .iter_mut()
-            .find(|item| item.0 == p_entity)
-            .map(|v| v.1)
-        else {
-            continue;
-        };
-
         if velocity.0 != 0.0 || velocity.1 != 0.0 {
+            did_move = true;
             player_rect.x += velocity.0;
-            for other in other_rects.iter() {
-                if player_rect.collides_rect(other) {
+            for static_rect in static_rects.iter() {
+                if player_rect.collides_rect(static_rect) {
                     if velocity.0 > 0.0 {
-                        player_rect.x = other.x - player_rect.width; // stop right before left wall
+                        player_rect.x = static_rect.x - player_rect.width; // stop right before left wall
                     } else if velocity.0 < 0.0 {
-                        player_rect.x = other.x + other.width; // stop right before right wall
+                        player_rect.x = static_rect.x + static_rect.width; // stop right before right wall
                     }
                 }
             }
 
-            for (m_entity, other) in movers_rects.iter() {
-                if *m_entity == p_entity {
-                    continue;
-                }
-                if player_rect.collides_rect(other) {
+            for (_, moving_rect, ..) in left.iter().chain(rest.iter()) {
+                if player_rect.collides_rect(moving_rect) {
                     if velocity.0 > 0.0 {
-                        player_rect.x = other.x - player_rect.width; // stop right before left wall
+                        player_rect.x = moving_rect.x - player_rect.width; // stop right before left wall
                     } else if velocity.0 < 0.0 {
-                        player_rect.x = other.x + other.width; // stop right before right wall
+                        player_rect.x = moving_rect.x + moving_rect.width; // stop right before right wall
                     }
                 }
             }
 
             player_rect.y += velocity.1;
-            for other in other_rects.iter() {
-                if player_rect.collides_rect(other) {
+            for static_rect in static_rects.iter() {
+                if player_rect.collides_rect(static_rect) {
                     if velocity.1 > 0.0 {
-                        player_rect.y = other.y - player_rect.height; // stop above floor
+                        player_rect.y = static_rect.y - player_rect.height; // stop above floor
                     } else if velocity.1 < 0.0 {
-                        player_rect.y = other.y + other.height; // stop below ceiling
+                        player_rect.y = static_rect.y + static_rect.height; // stop below ceiling
                     }
                 }
             }
 
-            for (m_entity, other) in movers_rects.iter() {
-                if *m_entity == p_entity {
-                    continue;
-                }
-                if player_rect.collides_rect(other) {
+            for (_, moving_rect, ..) in left.iter().chain(rest.iter()) {
+                if player_rect.collides_rect(moving_rect) {
                     if velocity.1 > 0.0 {
-                        player_rect.y = other.y - player_rect.height; // stop above floor
+                        player_rect.y = moving_rect.y - player_rect.height; // stop above floor
                     } else if velocity.1 < 0.0 {
-                        player_rect.y = other.y + other.height; // stop below ceiling
+                        player_rect.y = moving_rect.y + moving_rect.height; // stop below ceiling
                     }
                 }
             }
         } else {
-            for other in other_rects.iter() {
-                if player_rect.collides_rect(other) {
+            // No velocity position check
+            for static_rect in static_rects.iter() {
+                if player_rect.collides_rect(static_rect) {
                     // Compute overlap along X and Y
-                    let delta_x =
-                        (player_rect.x + player_rect.width / 2.0) - (other.x + other.width / 2.0);
-                    let delta_y =
-                        (player_rect.y + player_rect.height / 2.0) - (other.y + other.height / 2.0);
-                    let intersect_x = (player_rect.width + other.width) / 2.0 - delta_x.abs();
-                    let intersect_y = (player_rect.height + other.height) / 2.0 - delta_y.abs();
+                    let delta_x = (player_rect.x + player_rect.width / 2.0)
+                        - (static_rect.x + static_rect.width / 2.0);
+                    let delta_y = (player_rect.y + player_rect.height / 2.0)
+                        - (static_rect.y + static_rect.height / 2.0);
+                    let intersect_x = (player_rect.width + static_rect.width) / 2.0 - delta_x.abs();
+                    let intersect_y =
+                        (player_rect.height + static_rect.height) / 2.0 - delta_y.abs();
 
                     // Only push along the axis of least penetration
                     if intersect_x < intersect_y {
@@ -574,18 +523,21 @@ fn player_collision_system(
                     }
                 }
             }
-            for (o_entity, other) in movers_rects.iter() {
-                if *o_entity == p_entity {
-                    continue;
-                }
-                if player_rect.collides_rect(other) {
+
+            for (_, moving_rect, _, _, mover_velocity) in left.iter().chain(rest.iter()) {
+                // If the other entity has velocity, we will handle the collision then
+                if mover_velocity.0 == 0.0
+                    && mover_velocity.1 == 0.0
+                    && player_rect.collides_rect(moving_rect)
+                {
                     // Compute overlap along X and Y
-                    let delta_x =
-                        (player_rect.x + player_rect.width / 2.0) - (other.x + other.width / 2.0);
-                    let delta_y =
-                        (player_rect.y + player_rect.height / 2.0) - (other.y + other.height / 2.0);
-                    let intersect_x = (player_rect.width + other.width) / 2.0 - delta_x.abs();
-                    let intersect_y = (player_rect.height + other.height) / 2.0 - delta_y.abs();
+                    let delta_x = (player_rect.x + player_rect.width / 2.0)
+                        - (moving_rect.x + moving_rect.width / 2.0);
+                    let delta_y = (player_rect.y + player_rect.height / 2.0)
+                        - (moving_rect.y + moving_rect.height / 2.0);
+                    let intersect_x = (player_rect.width + moving_rect.width) / 2.0 - delta_x.abs();
+                    let intersect_y =
+                        (player_rect.height + moving_rect.height) / 2.0 - delta_y.abs();
 
                     // Only push along the axis of least penetration
                     if intersect_x < intersect_y {
@@ -603,8 +555,13 @@ fn player_collision_system(
                             player_rect.y -= intersect_y;
                         }
                     }
+                    did_move = true;
                 }
             }
+        }
+
+        if did_move {
+            update_spatial_hash.write(UpdateSpatialHash(*p_entity));
         }
 
         // Update the actual position based on resolved rectangle
@@ -637,7 +594,7 @@ fn update_on_screen_system(
     spatial_hash: Res<SpatialHash>,
     window: Res<WindowResource>,
     camera: Single<&Camera, With<ActiveCamera>>,
-    on_screen_q: Query<Entity, (With<OnScreen>, Without<Player>)>,
+    on_screen_q: Query<Entity, With<OnScreen>>,
     mut commands: Commands,
 ) {
     let screen_size = window.0.get_screen_size().to_vector2();
@@ -692,30 +649,39 @@ fn update_render_textures_size_system(
     }
 }
 
+fn update_camera_offset(mut ev_resize: EventReader<ResizeEvent>, mut camera: Single<&mut Camera>) {
+    for ev in ev_resize.read() {
+        camera.0.offset = Vector2::new(ev.to.x as f32 / 2.0, ev.to.y as f32 / 2.0);
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn update_spatial_hash_system(
     mut spatial_hash: ResMut<SpatialHash>,
-    query: Query<(Entity, &Sprite, &Transform), (Without<Player>, Changed<Transform>)>,
+    mut event_r: EventReader<UpdateSpatialHash>,
+    query: Query<(Entity, &Sprite, &Transform)>,
 ) {
-    for (entity, sprite, transform) in query {
-        let origin = sprite.get_origin_vector();
-        let rect = match &sprite.kind {
-            SpriteKind::Rectangle { size: shape, .. } => Rectangle {
-                x: transform.position.x - (shape.0 * transform.scale.x) * origin.x,
-                y: transform.position.y - (shape.1 * transform.scale.y) * origin.y,
-                width: shape.0 * transform.scale.x,
-                height: shape.1 * transform.scale.y,
-            },
-            SpriteKind::Circle { radius, .. } => Rectangle {
-                x: transform.position.x - (radius * transform.scale.x) * origin.x,
-                y: transform.position.y - (radius * transform.scale.y) * origin.y,
-                width: radius * transform.scale.x,
-                height: radius * transform.scale.y,
-            },
-            _ => continue,
-        };
+    for ev in event_r.read() {
+        if let Ok((entity, sprite, transform)) = query.get(ev.0) {
+            let origin = sprite.get_origin_vector();
+            let rect = match &sprite.kind {
+                SpriteKind::Rectangle { size: shape, .. } => Rectangle {
+                    x: transform.position.x - (shape.0 * transform.scale.x) * origin.x,
+                    y: transform.position.y - (shape.1 * transform.scale.y) * origin.y,
+                    width: shape.0 * transform.scale.x,
+                    height: shape.1 * transform.scale.y,
+                },
+                SpriteKind::Circle { radius, .. } => Rectangle {
+                    x: transform.position.x - (radius * transform.scale.x) * origin.x,
+                    y: transform.position.y - (radius * transform.scale.y) * origin.y,
+                    width: radius * transform.scale.x,
+                    height: radius * transform.scale.y,
+                },
+                _ => continue,
+            };
 
-        spatial_hash.update(entity, rect);
+            spatial_hash.update(entity, rect);
+        }
     }
 }
 
@@ -733,6 +699,13 @@ fn render_system(
         .draw(|d| {
             d.clear(Color::CORNFLOWERBLUE);
             let screen_size = window.0.get_screen_size();
+
+            // Draw GAME entities and other stuff on the layers
+            for (_, rt) in layer_rt.0.iter() {
+                d.draw_render_texture(rt);
+            }
+
+            // START OF UI RENDERING
             d.draw_rect(
                 Rectangle {
                     height: 30.0,
@@ -742,11 +715,6 @@ fn render_system(
                 },
                 Color::new(0, 0, 0, 255).fade(0.5),
             );
-
-            for (_, rt) in layer_rt.0.iter() {
-                d.draw_render_texture(rt);
-            }
-
             d.draw_fps(10, screen_size.y - 25);
             d.draw_text("Hello, RustyRay!", 20, 20, 32, Color::WHITE);
             for (text, transform) in text.iter() {
