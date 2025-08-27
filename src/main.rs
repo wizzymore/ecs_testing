@@ -1,199 +1,15 @@
 use std::collections::HashMap;
 
-use bevy_ecs::{
-    bundle::Bundle,
-    component::Component,
-    entity::Entity,
-    event::{Event, EventReader, EventWriter, Events},
-    query::{With, Without},
-    resource::Resource,
-    schedule::IntoScheduleConfigs,
-    system::{Commands, Query, Res, ResMut, Single},
-    world::World,
-};
+use bevy_ecs::prelude::*;
+use components::*;
 use rayon::prelude::*;
-use rustyray::prelude::{
-    Camera2D, Color, ConfigFlag, OwnedRenderTexture, OwnedTexture, Rectangle, Vector2, Vector2i,
-    Window, WindowBuilder,
-};
+use resources::*;
+use rustyray::prelude::*;
+use spatial_hash::SpatialHash;
 
-use crate::spatial_hash::SpatialHash;
+mod components;
+mod resources;
 mod spatial_hash;
-
-#[derive(Component)]
-struct Camera(Camera2D);
-
-#[derive(Component)]
-struct ActiveCamera;
-
-#[derive(Component)]
-struct CameraTarget;
-
-#[derive(Resource)]
-struct WindowResource(Window);
-
-impl Drop for LayerTextures {
-    fn drop(&mut self) {
-        println!("LayerTextures dropped");
-    }
-}
-
-impl Drop for WindowResource {
-    fn drop(&mut self) {
-        println!("WindowResource dropped");
-    }
-}
-
-#[derive(Resource, Default)]
-struct LayerTextures(HashMap<u32, OwnedRenderTexture>);
-
-#[allow(dead_code)]
-enum SpriteKind {
-    Rectangle { size: (f32, f32), lines: bool },
-    Circle { radius: f32 },
-    Texture { texture: OwnedTexture },
-}
-
-impl Default for SpriteKind {
-    fn default() -> Self {
-        Self::Rectangle {
-            size: (32.0, 32.0),
-            lines: false,
-        }
-    }
-}
-
-#[derive(Default)]
-#[allow(dead_code)]
-enum SpriteOrigin {
-    TopLeft,
-    Top,
-    TopRight,
-    Left,
-    Middle,
-    Right,
-    BottomLeft,
-    #[default]
-    Bottom,
-    BottomRight,
-    Custom(Vector2),
-}
-
-#[derive(Component)]
-struct Sprite {
-    kind: SpriteKind,
-    origin: SpriteOrigin,
-    color: Color,
-}
-
-impl Default for Sprite {
-    fn default() -> Self {
-        Self {
-            kind: SpriteKind::default(),
-            origin: SpriteOrigin::default(),
-            color: Color::GREEN,
-        }
-    }
-}
-
-impl Sprite {
-    fn get_origin_vector(&self) -> Vector2 {
-        match self.origin {
-            SpriteOrigin::TopLeft => Vector2::new(0.0, 0.0),
-            SpriteOrigin::Top => Vector2::new(0.5, 0.0),
-            SpriteOrigin::TopRight => Vector2::new(1.0, 0.0),
-            SpriteOrigin::Left => Vector2::new(0.0, 0.5),
-            SpriteOrigin::Middle => Vector2::new(0.5, 0.5),
-            SpriteOrigin::Right => Vector2::new(1.0, 0.5),
-            SpriteOrigin::BottomLeft => Vector2::new(0.0, 1.0),
-            SpriteOrigin::Bottom => Vector2::new(0.5, 1.0),
-            SpriteOrigin::BottomRight => Vector2::new(1.0, 1.0),
-            SpriteOrigin::Custom(vec) => {
-                debug_assert!(vec.x >= 0.0 && vec.x <= 1.0);
-                debug_assert!(vec.y >= 0.0 && vec.y <= 1.0);
-                vec
-            }
-        }
-    }
-}
-
-#[derive(Component)]
-struct OnScreen;
-
-#[derive(Clone, Component)]
-struct Transform {
-    position: Vector2,
-    rotation: f32,
-    scale: Vector2,
-}
-
-impl Default for Transform {
-    fn default() -> Self {
-        Self {
-            position: Vector2 { x: 0.0, y: 0.0 },
-            rotation: 0.0,
-            scale: Vector2 { x: 1.0, y: 1.0 },
-        }
-    }
-}
-
-#[derive(Component)]
-struct Text {
-    content: String,
-    font_size: u32,
-    color: Color,
-}
-
-#[derive(Component)]
-struct CountText;
-
-#[derive(Component)]
-struct Player;
-
-#[derive(Component, Default)]
-struct Layer(u32);
-
-#[derive(Bundle, Default)]
-struct SpriteBundle {
-    sprite: Sprite,
-    transform: Transform,
-    layer: Layer,
-}
-
-#[derive(Resource)]
-struct WindowSize(Vector2i);
-
-#[derive(Event)]
-struct ResizeEvent {
-    from: Vector2i,
-    to: Vector2i,
-}
-
-#[derive(Resource, Clone, Copy)]
-struct Time {
-    delta: f32,
-    accumulator: f32,
-}
-
-#[derive(Component, Default)]
-struct Velocity(f32, f32);
-
-#[derive(Event)]
-struct UpdateSpatialHash(Entity);
-
-impl Time {
-    pub fn new(framerate: f32) -> Self {
-        let timestep = 1.0 / framerate;
-        Self {
-            delta: timestep,
-            accumulator: 0.0,
-        }
-    }
-
-    pub fn delta(&self) -> f32 {
-        self.delta
-    }
-}
 
 fn init_world(world: &mut World) {
     world.insert_resource(spatial_hash::SpatialHash::new(96.0));
@@ -236,6 +52,7 @@ fn main() {
     render_schedule.add_systems((
         update_camera_offset,
         update_render_textures_size_system,
+        render_layers,
         render_system,
     ));
     physics_update_schedule.add_systems((move_player_system, apply_velocity_system).chain());
@@ -289,7 +106,7 @@ fn main() {
                 },
                 ..Default::default()
             },
-            Velocity(2.0, -2.0),
+            Velocity(Vector2::new(2.0, -2.0)),
             OnScreen,
         ));
         spawn_events.send(UpdateSpatialHash(platform.id()));
@@ -332,8 +149,8 @@ fn main() {
 
     let mut time = Time::new(60.0);
     let mut window = world.resource::<WindowResource>();
-    while !window.0.should_close() {
-        let frame_time = window.0.frame_time();
+    while !window.should_close() {
+        let frame_time = window.frame_time();
         time.accumulator += frame_time;
         while time.accumulator >= time.delta {
             world.insert_resource(time);
@@ -358,10 +175,10 @@ fn move_player_system(
     time: Res<Time>,
     mut velocity: Single<&mut Velocity, With<Player>>,
 ) {
-    let move_left = window.0.is_key_down(rustyray::prelude::KeyboardKey::A);
-    let move_right = window.0.is_key_down(rustyray::prelude::KeyboardKey::D);
-    let move_up = window.0.is_key_down(rustyray::prelude::KeyboardKey::W);
-    let move_down = window.0.is_key_down(rustyray::prelude::KeyboardKey::S);
+    let move_left = window.is_key_down(rustyray::prelude::KeyboardKey::A);
+    let move_right = window.is_key_down(rustyray::prelude::KeyboardKey::D);
+    let move_up = window.is_key_down(rustyray::prelude::KeyboardKey::W);
+    let move_down = window.is_key_down(rustyray::prelude::KeyboardKey::S);
 
     const SPEED: f32 = 300.0;
     const RUN_SPEED: f32 = SPEED * 3.0;
@@ -388,8 +205,7 @@ fn move_player_system(
         SPEED
     } * dir.normalized()
         * time.delta();
-    velocity.0 = m.x;
-    velocity.1 = m.y;
+    velocity.0 = m;
 }
 
 #[allow(clippy::type_complexity)]
@@ -449,14 +265,14 @@ fn apply_velocity_system(
         let mut did_move = false;
         let origin = sprite.get_origin_vector();
 
-        if velocity.0 != 0.0 || velocity.1 != 0.0 {
+        if velocity.x != 0.0 || velocity.y != 0.0 {
             did_move = true;
-            player_rect.x += velocity.0;
+            player_rect.x += velocity.x;
             for static_rect in static_rects.iter() {
                 if player_rect.collides_rect(static_rect) {
-                    if velocity.0 > 0.0 {
+                    if velocity.x > 0.0 {
                         player_rect.x = static_rect.x - player_rect.width; // stop right before left wall
-                    } else if velocity.0 < 0.0 {
+                    } else if velocity.x < 0.0 {
                         player_rect.x = static_rect.x + static_rect.width; // stop right before right wall
                     }
                 }
@@ -464,20 +280,20 @@ fn apply_velocity_system(
 
             for (_, moving_rect, ..) in left.iter().chain(rest.iter()) {
                 if player_rect.collides_rect(moving_rect) {
-                    if velocity.0 > 0.0 {
+                    if velocity.x > 0.0 {
                         player_rect.x = moving_rect.x - player_rect.width; // stop right before left wall
-                    } else if velocity.0 < 0.0 {
+                    } else if velocity.x < 0.0 {
                         player_rect.x = moving_rect.x + moving_rect.width; // stop right before right wall
                     }
                 }
             }
 
-            player_rect.y += velocity.1;
+            player_rect.y += velocity.y;
             for static_rect in static_rects.iter() {
                 if player_rect.collides_rect(static_rect) {
-                    if velocity.1 > 0.0 {
+                    if velocity.y > 0.0 {
                         player_rect.y = static_rect.y - player_rect.height; // stop above floor
-                    } else if velocity.1 < 0.0 {
+                    } else if velocity.y < 0.0 {
                         player_rect.y = static_rect.y + static_rect.height; // stop below ceiling
                     }
                 }
@@ -485,9 +301,9 @@ fn apply_velocity_system(
 
             for (_, moving_rect, ..) in left.iter().chain(rest.iter()) {
                 if player_rect.collides_rect(moving_rect) {
-                    if velocity.1 > 0.0 {
+                    if velocity.y > 0.0 {
                         player_rect.y = moving_rect.y - player_rect.height; // stop above floor
-                    } else if velocity.1 < 0.0 {
+                    } else if velocity.y < 0.0 {
                         player_rect.y = moving_rect.y + moving_rect.height; // stop below ceiling
                     }
                 }
@@ -526,8 +342,8 @@ fn apply_velocity_system(
 
             for (_, moving_rect, _, _, mover_velocity) in left.iter().chain(rest.iter()) {
                 // If the other entity has velocity, we will handle the collision then
-                if mover_velocity.0 == 0.0
-                    && mover_velocity.1 == 0.0
+                if mover_velocity.x == 0.0
+                    && mover_velocity.y == 0.0
                     && player_rect.collides_rect(moving_rect)
                 {
                     // Compute overlap along X and Y
@@ -577,7 +393,7 @@ fn move_camera_to_target_system(
     mut camera: Single<&mut Camera, With<ActiveCamera>>,
     target: Single<&Transform, With<CameraTarget>>,
 ) {
-    camera.0.target = target.position;
+    camera.target = target.position;
 }
 
 fn update_count_text_system(
@@ -597,10 +413,10 @@ fn update_on_screen_system(
     on_screen_q: Query<Entity, With<OnScreen>>,
     mut commands: Commands,
 ) {
-    let screen_size = window.0.get_screen_size().to_vector2();
+    let screen_size = window.get_screen_size().to_vector2();
     let (min_x, min_y) = (
-        camera.0.target.x - camera.0.offset.x,
-        camera.0.target.y - camera.0.offset.y,
+        camera.target.x - camera.offset.x,
+        camera.target.y - camera.offset.y,
     );
 
     let on_screen_entities = spatial_hash.query(Rectangle {
@@ -623,8 +439,8 @@ fn check_for_resize_system(
     mut current_size: ResMut<WindowSize>,
     mut ev_resize: EventWriter<ResizeEvent>,
 ) {
-    if window.0.get_screen_size() != current_size.0 {
-        let new_size = window.0.get_screen_size();
+    if window.get_screen_size() != current_size.0 {
+        let new_size = window.get_screen_size();
         println!("Window resized to {}x{}", new_size.x, new_size.y);
         ev_resize.write(ResizeEvent {
             from: current_size.0,
@@ -651,7 +467,7 @@ fn update_render_textures_size_system(
 
 fn update_camera_offset(mut ev_resize: EventReader<ResizeEvent>, mut camera: Single<&mut Camera>) {
     for ev in ev_resize.read() {
-        camera.0.offset = Vector2::new(ev.to.x as f32 / 2.0, ev.to.y as f32 / 2.0);
+        camera.offset = Vector2::new(ev.to.x as f32 / 2.0, ev.to.y as f32 / 2.0);
     }
 }
 
@@ -686,57 +502,49 @@ fn update_spatial_hash_system(
 }
 
 fn render_system(
-    window: Res<WindowResource>,
-    mut layer_rt: ResMut<LayerTextures>,
-    sprite_q: Query<(&Sprite, &Transform, &Layer), With<OnScreen>>,
-    camera: Query<(&Camera, &ActiveCamera)>,
+    mut window: ResMut<WindowResource>,
+    layer_rt: Res<LayerTextures>,
     text: Query<(&Text, &Transform)>,
 ) {
-    render_layers(&window, &mut layer_rt, sprite_q.iter().collect(), &camera);
+    let screen_size = window.get_screen_size();
+    window.draw(|d| {
+        d.clear(Color::CORNFLOWERBLUE);
 
-    window
-        .0
-        .draw(|d| {
-            d.clear(Color::CORNFLOWERBLUE);
-            let screen_size = window.0.get_screen_size();
+        // Draw GAME entities and other stuff on the layers
+        for (_, rt) in layer_rt.0.iter() {
+            d.draw_render_texture(rt);
+        }
 
-            // Draw GAME entities and other stuff on the layers
-            for (_, rt) in layer_rt.0.iter() {
-                d.draw_render_texture(rt);
-            }
-
-            // START OF UI RENDERING
-            d.draw_rect(
-                Rectangle {
-                    height: 30.0,
-                    width: screen_size.x as f32,
-                    x: 0.0,
-                    y: screen_size.y as f32 - 30.0,
-                },
-                Color::new(0, 0, 0, 255).fade(0.5),
+        // START OF UI RENDERING
+        d.draw_rect(
+            Rectangle {
+                height: 30.0,
+                width: screen_size.x as f32,
+                x: 0.0,
+                y: screen_size.y as f32 - 30.0,
+            },
+            Color::new(0, 0, 0, 255).fade(0.5),
+        );
+        d.draw_fps(10, screen_size.y - 25);
+        d.draw_text("Hello, RustyRay!", 20, 20, 32, Color::WHITE);
+        for (text, transform) in text.iter() {
+            d.draw_text(
+                &text.content,
+                transform.position.x as i32,
+                transform.position.y as i32,
+                text.font_size as i32,
+                text.color,
             );
-            d.draw_fps(10, screen_size.y - 25);
-            d.draw_text("Hello, RustyRay!", 20, 20, 32, Color::WHITE);
-            for (text, transform) in text.iter() {
-                d.draw_text(
-                    &text.content,
-                    transform.position.x as i32,
-                    transform.position.y as i32,
-                    text.font_size as i32,
-                    text.color,
-                );
-            }
-        })
-        .expect("Failed to draw the frame");
+        }
+    });
 }
 
 fn render_layers(
-    window: &Res<'_, WindowResource>,
-    layer_rt: &mut ResMut<LayerTextures>,
-    sprite_q: Vec<(&Sprite, &Transform, &Layer)>,
-    camera: &Query<(&Camera, &ActiveCamera)>,
+    mut window: ResMut<WindowResource>,
+    mut layer_rt: ResMut<LayerTextures>,
+    sprite_q: Query<(&Sprite, &Transform, &Layer), With<OnScreen>>,
+    camera: Single<&Camera, With<ActiveCamera>>,
 ) {
-    let camera = camera.single().unwrap().0;
     let sprites: Vec<_> = sprite_q.iter().collect();
     // This created a map for each thread with all the sprites in that thread
     // then we merge all the small maps into a big one with all the sprites
@@ -766,64 +574,66 @@ fn render_layers(
             .0
             .entry(*layer)
             .or_insert_with(|| OwnedRenderTexture::new(1024, 768).unwrap());
-        window.0.draw_render_texture(render_texture, |d| {
+        window.draw_texture_mode(render_texture, |mut d| {
             d.clear(Color::BLANK);
-            let _ch = d.begin_mode_2d(camera.0);
-            for (sprite, transform) in sprites.iter() {
-                match &sprite.kind {
-                    SpriteKind::Rectangle { size, lines } => {
-                        let origin = sprite.get_origin_vector();
-                        let mut dest = Rectangle {
-                            x: transform.position.x,
-                            y: transform.position.y,
-                            width: size.0 * transform.scale.x,
-                            height: size.1 * transform.scale.y,
-                        };
-                        if *lines {
-                            dest.x -= dest.width * origin.x;
-                            dest.y -= dest.height * origin.y;
-                            d.draw_rect_lines(dest, sprite.color);
-                        } else {
-                            d.draw_rect_pro(
+            {
+                let d = d.begin_mode_2d(&camera);
+                for (sprite, transform) in sprites.iter() {
+                    match &sprite.kind {
+                        SpriteKind::Rectangle { size, lines } => {
+                            let origin = sprite.get_origin_vector();
+                            let mut dest = Rectangle {
+                                x: transform.position.x,
+                                y: transform.position.y,
+                                width: size.0 * transform.scale.x,
+                                height: size.1 * transform.scale.y,
+                            };
+                            if *lines {
+                                dest.x -= dest.width * origin.x;
+                                dest.y -= dest.height * origin.y;
+                                d.draw_rect_lines(dest, sprite.color);
+                            } else {
+                                d.draw_rect_pro(
+                                    dest,
+                                    origin * dest.size(),
+                                    transform.rotation,
+                                    sprite.color,
+                                );
+                            }
+                            d.draw_circle(transform.position, 2.0, Color::BLUE);
+                        }
+                        SpriteKind::Circle { radius } => {
+                            d.draw_circle(
+                                Vector2 {
+                                    x: transform.position.x,
+                                    y: transform.position.y,
+                                },
+                                radius * transform.scale.x,
+                                sprite.color,
+                            );
+                        }
+                        SpriteKind::Texture { texture } => {
+                            let size = texture.size();
+                            let dest = Rectangle {
+                                x: transform.position.x,
+                                y: transform.position.y,
+                                width: size.x as f32 * transform.scale.x,
+                                height: size.y as f32 * transform.scale.y,
+                            };
+                            d.draw_texture_pro(
+                                texture,
+                                Rectangle {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: size.x as f32,
+                                    height: size.y as f32,
+                                },
                                 dest,
-                                origin * dest.size(),
+                                Vector2 { x: 0.0, y: 0.0 },
                                 transform.rotation,
                                 sprite.color,
                             );
                         }
-                        d.draw_circle(transform.position, 2.0, Color::BLUE);
-                    }
-                    SpriteKind::Circle { radius } => {
-                        d.draw_circle(
-                            Vector2 {
-                                x: transform.position.x,
-                                y: transform.position.y,
-                            },
-                            radius * transform.scale.x,
-                            sprite.color,
-                        );
-                    }
-                    SpriteKind::Texture { texture } => {
-                        let size = texture.size();
-                        let dest = Rectangle {
-                            x: transform.position.x,
-                            y: transform.position.y,
-                            width: size.x as f32 * transform.scale.x,
-                            height: size.y as f32 * transform.scale.y,
-                        };
-                        d.draw_texture_pro(
-                            texture,
-                            Rectangle {
-                                x: 0.0,
-                                y: 0.0,
-                                width: size.x as f32,
-                                height: size.y as f32,
-                            },
-                            dest,
-                            Vector2 { x: 0.0, y: 0.0 },
-                            transform.rotation,
-                            sprite.color,
-                        );
                     }
                 }
             }
