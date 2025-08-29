@@ -3,6 +3,9 @@ name = "testing"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+once = []
+
 [dependencies]
 bevy_ecs = { version = "0.16.1", features = ["multi_threaded"] }
 rayon = "1.11.0"
@@ -17,8 +20,7 @@ opt-level = 3
 opt-level = 1
 
 [profile.release]
-lto = true
+# lto = true
 opt-level = 3
-codegen-units = 1
-incremental = false
-debug = true
+incremental = true
+debug = false

@@ -664,7 +664,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rustyray"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "bitmask-enum",
  "rustyray-sys",
@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "rustyray-sys"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "cmake",
  "fs_extra",

@@ -97,7 +97,30 @@ impl Sprite {
 #[derive(Component)]
 pub struct OnScreen;
 
-#[derive(Clone, Component)]
+#[derive(Debug)]
+pub enum ColliderKind {
+    Rectangle(Vector2),
+}
+
+impl Default for ColliderKind {
+    fn default() -> Self {
+        Self::Rectangle(Vector2::new(32.0, 32.0))
+    }
+}
+
+#[derive(Debug, Component, Default)]
+pub struct Collider {
+    pub kind: ColliderKind,
+    pub offset: Vector2,
+}
+
+#[derive(Bundle, Default)]
+pub struct ColliderBundle {
+    pub collider: Collider,
+    pub transform: Transform,
+}
+
+#[derive(Debug, Clone, Copy, Component)]
 pub struct Transform {
     pub position: Vector2,
     pub rotation: f32,
@@ -105,6 +128,41 @@ pub struct Transform {
 }
 
 impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            position: Vector2 { x: 0.0, y: 0.0 },
+            rotation: 0.0,
+            scale: Vector2 { x: 1.0, y: 1.0 },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Component)]
+pub struct GlobalTransform {
+    pub position: Vector2,
+    pub rotation: f32,
+    pub scale: Vector2,
+}
+
+impl GlobalTransform {
+    pub fn from_local(parent: &GlobalTransform, local: &Transform) -> Self {
+        Self {
+            position: parent.position + local.position,
+            rotation: (parent.rotation + local.rotation).rem_euclid(360.0),
+            scale: parent.scale * local.scale,
+        }
+    }
+
+    pub fn from_root(local: &Transform) -> Self {
+        Self {
+            position: local.position,
+            rotation: local.rotation.rem_euclid(360.0),
+            scale: local.scale,
+        }
+    }
+}
+
+impl Default for GlobalTransform {
     fn default() -> Self {
         Self {
             position: Vector2 { x: 0.0, y: 0.0 },
@@ -137,7 +195,7 @@ pub struct SpriteBundle {
     pub layer: Layer,
 }
 
-#[derive(Component, Default)]
+#[derive(Debug, Component, Default)]
 pub struct Velocity(pub Vector2);
 
 impl std::ops::Deref for Velocity {

@@ -55,7 +55,7 @@ impl Time {
         let timestep = 1.0 / framerate;
         Self {
             delta: timestep,
-            accumulator: 0.0,
+            accumulator: timestep,
         }
     }
 

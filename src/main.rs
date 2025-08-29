@@ -41,12 +41,24 @@ fn cleanup_world(world: &mut World) {
     world.remove_resource::<LayerTextures>();
 }
 
+#[derive(Component)]
+struct SyncColliderWithSprite;
+
+#[derive(Component)]
+struct TestEntity;
+
 fn main() {
     let mut world = World::default();
     init_world(&mut world);
 
     let mut update_schedule = bevy_ecs::schedule::Schedule::default();
+    let mut first_physics_update_schedule = bevy_ecs::schedule::Schedule::default();
+    let mut pre_physics_update_schedule = bevy_ecs::schedule::Schedule::default();
     let mut physics_update_schedule = bevy_ecs::schedule::Schedule::default();
+    let mut post_physics_update_schedule = bevy_ecs::schedule::Schedule::default();
+    let mut last_physics_update_schedule = bevy_ecs::schedule::Schedule::default();
+    last_physics_update_schedule
+        .set_executor_kind(bevy_ecs::schedule::ExecutorKind::SingleThreaded);
     let mut render_schedule = bevy_ecs::schedule::Schedule::default();
     render_schedule.set_executor_kind(bevy_ecs::schedule::ExecutorKind::SingleThreaded);
     render_schedule.add_systems((
@@ -55,14 +67,22 @@ fn main() {
         render_layers,
         render_system,
     ));
-    physics_update_schedule.add_systems((move_player_system, apply_velocity_system).chain());
+    first_physics_update_schedule.add_systems(ensure_global_transform_system);
+    pre_physics_update_schedule.add_systems((
+        update_global_transforms_system,
+        sync_collider_with_sprite_system,
+    ));
+    physics_update_schedule.add_systems(move_player_system);
+    post_physics_update_schedule.add_systems(apply_velocity_system);
+    last_physics_update_schedule.add_systems((
+        update_global_transforms_system,
+        update_spatial_hash_system,
+        update_on_screen_system.after(update_spatial_hash_system),
+    ));
     update_schedule.add_systems((
         move_camera_to_target_system,
         update_count_text_system,
         check_for_resize_system,
-        // detect_new_entities_system,
-        update_spatial_hash_system,
-        update_on_screen_system.after(update_spatial_hash_system),
     ));
 
     world.init_resource::<Events<UpdateSpatialHash>>();
@@ -79,7 +99,7 @@ fn main() {
                         lines: false,
                     },
                     color: Color::RED,
-                    origin: SpriteOrigin::Custom(Vector2::new(0.5, 0.75)),
+                    origin: SpriteOrigin::Custom(Vector2::new(1.0, 1.0)),
                 },
                 transform: Transform {
                     position: Vector2 { x: 50.0, y: 50.0 },
@@ -91,6 +111,8 @@ fn main() {
             Player,
             OnScreen,
             CameraTarget,
+            Collider::default(),
+            SyncColliderWithSprite,
         ));
 
         spawn_events.send(UpdateSpatialHash(player.id()));
@@ -100,7 +122,7 @@ fn main() {
         let platform = world.spawn((
             SpriteBundle {
                 transform: Transform {
-                    position: Vector2 { x: 0., y: 100. },
+                    position: Vector2 { x: 100., y: 100. },
                     scale: Vector2 { x: 40.0, y: 1.0 },
                     ..Default::default()
                 },
@@ -108,28 +130,34 @@ fn main() {
             },
             Velocity(Vector2::new(2.0, -2.0)),
             OnScreen,
+            Collider::default(),
+            SyncColliderWithSprite,
         ));
         spawn_events.send(UpdateSpatialHash(platform.id()));
     }
 
-    const TO_SPAWN: usize = 20_000 / 5;
+    const TO_SPAWN: usize = 5 / 5;
 
     (0..5).for_each(|i| {
         (0..TO_SPAWN).for_each(|j| {
-            let entity = world.spawn(SpriteBundle {
-                sprite: Sprite {
-                    origin: SpriteOrigin::Custom((0.5, 0.75).into()),
-                    ..Default::default()
-                },
-                transform: Transform {
-                    position: Vector2 {
-                        x: 200. + (35 * j) as f32,
-                        y: 500. + (35 * i) as f32,
+            let entity = world.spawn((
+                SpriteBundle {
+                    sprite: Sprite {
+                        origin: SpriteOrigin::Custom((0.0, 0.0).into()),
+                        ..Default::default()
+                    },
+                    transform: Transform {
+                        position: Vector2 {
+                            x: 200. + (35 * j) as f32,
+                            y: 100. + (35 * i) as f32,
+                        },
+                        ..Default::default()
                     },
                     ..Default::default()
                 },
-                ..Default::default()
-            });
+                Collider::default(),
+                SyncColliderWithSprite,
+            ));
 
             spawn_events.send(UpdateSpatialHash(entity.id()));
         });
@@ -147,14 +175,19 @@ fn main() {
         CountText,
     ));
 
+    let once = cfg!(feature = "once");
     let mut time = Time::new(60.0);
     let mut window = world.resource::<WindowResource>();
-    while !window.should_close() {
+    loop {
         let frame_time = window.frame_time();
         time.accumulator += frame_time;
         while time.accumulator >= time.delta {
             world.insert_resource(time);
+            first_physics_update_schedule.run(&mut world);
+            pre_physics_update_schedule.run(&mut world);
             physics_update_schedule.run(&mut world);
+            post_physics_update_schedule.run(&mut world);
+            last_physics_update_schedule.run(&mut world);
             time.accumulator -= time.delta
         }
         world.insert_resource(Time {
@@ -165,6 +198,9 @@ fn main() {
         render_schedule.run(&mut world);
 
         window = world.resource::<WindowResource>();
+        if window.should_close() || once {
+            break;
+        }
     }
 
     cleanup_world(&mut world);
@@ -175,10 +211,10 @@ fn move_player_system(
     time: Res<Time>,
     mut velocity: Single<&mut Velocity, With<Player>>,
 ) {
-    let move_left = window.is_key_down(rustyray::prelude::KeyboardKey::A);
-    let move_right = window.is_key_down(rustyray::prelude::KeyboardKey::D);
-    let move_up = window.is_key_down(rustyray::prelude::KeyboardKey::W);
-    let move_down = window.is_key_down(rustyray::prelude::KeyboardKey::S);
+    let move_left = window.is_key_down(KeyboardKey::A);
+    let move_right = window.is_key_down(KeyboardKey::D);
+    let move_up = window.is_key_down(KeyboardKey::W);
+    let move_down = window.is_key_down(KeyboardKey::S);
 
     const SPEED: f32 = 300.0;
     const RUN_SPEED: f32 = SPEED * 3.0;
@@ -211,59 +247,62 @@ fn move_player_system(
 #[allow(clippy::type_complexity)]
 fn apply_velocity_system(
     mut update_spatial_hash: EventWriter<UpdateSpatialHash>,
-    mut movers: Query<(Entity, &Sprite, &mut Transform, &Velocity)>,
-    mut others: Query<(&mut Sprite, &Transform), (With<OnScreen>, Without<Velocity>)>,
+    mut movers_q: Query<(
+        Entity,
+        &mut Transform,
+        &GlobalTransform,
+        &Velocity,
+        Option<&Collider>,
+    )>,
+    static_colliders: Query<(&Collider, &GlobalTransform), Without<Velocity>>,
 ) {
     // Record how much time this took
     let start = std::time::Instant::now();
 
-    // Precompute all movers rects
-    let mut moving_rects: Vec<_> = movers
-        .iter_mut()
-        .filter_map(|(m_entity, s, t, v)| {
-            if let SpriteKind::Rectangle { size, .. } = s.kind {
-                let mut r = Rectangle {
-                    x: t.position.x,
-                    y: t.position.y,
-                    width: size.0 * t.scale.x,
-                    height: size.1 * t.scale.y,
-                };
-                let o = s.get_origin_vector();
-                r.x -= r.width * o.x;
-                r.y -= r.height * o.y;
-                Some((m_entity, r, s, t, v))
-            } else {
-                None
-            }
+    // Precompute all static colliders
+    let static_rects: Vec<_> = static_colliders
+        .iter()
+        .map(|(collider, collider_gt)| {
+            let r = match collider.kind {
+                ColliderKind::Rectangle(size) => Rectangle {
+                    x: collider_gt.position.x + collider.offset.x,
+                    y: collider_gt.position.y + collider.offset.y,
+                    width: size.x * collider_gt.scale.x,
+                    height: size.y * collider_gt.scale.y,
+                },
+            };
+
+            r
         })
         .collect();
 
-    let static_rects: Vec<_> = others
+    let mut moving_rects = movers_q
         .iter_mut()
-        .filter_map(|(s, t)| {
-            if let SpriteKind::Rectangle { size, .. } = s.kind {
-                let mut r = Rectangle {
-                    x: t.position.x,
-                    y: t.position.y,
-                    width: size.0 * t.scale.x,
-                    height: size.1 * t.scale.y,
-                };
-                let o = s.get_origin_vector();
-                r.x -= r.width * o.x;
-                r.y -= r.height * o.y;
-                Some(r)
-            } else {
-                None
-            }
+        .filter_map(|(m_entity, mut t, gt, v, collider)| {
+            let Some(collider) = collider else {
+                t.position += v.0;
+                // update_spatial_hash.write(UpdateSpatialHash(m_entity));
+                return None;
+            };
+
+            let r = match collider.kind {
+                ColliderKind::Rectangle(size) => Rectangle {
+                    x: gt.position.x + collider.offset.x,
+                    y: gt.position.y + collider.offset.y,
+                    width: size.x * gt.scale.x,
+                    height: size.y * gt.scale.y,
+                },
+            };
+
+            Some((m_entity, r, t, v))
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     for i in 0..moving_rects.len() {
         let (left, right) = moving_rects.split_at_mut(i);
-        let ((p_entity, player_rect, sprite, transform, velocity), rest) =
-            right.split_first_mut().unwrap();
+        let ((p_entity, player_rect, transform, velocity), rest) = right.split_first_mut().unwrap();
+        let original_position = player_rect.position();
         let mut did_move = false;
-        let origin = sprite.get_origin_vector();
 
         if velocity.x != 0.0 || velocity.y != 0.0 {
             did_move = true;
@@ -340,7 +379,7 @@ fn apply_velocity_system(
                 }
             }
 
-            for (_, moving_rect, _, _, mover_velocity) in left.iter().chain(rest.iter()) {
+            for (_, moving_rect, _, mover_velocity) in left.iter().chain(rest.iter()) {
                 // If the other entity has velocity, we will handle the collision then
                 if mover_velocity.x == 0.0
                     && mover_velocity.y == 0.0
@@ -381,8 +420,7 @@ fn apply_velocity_system(
         }
 
         // Update the actual position based on resolved rectangle
-        transform.position.x = player_rect.x + player_rect.width * origin.x;
-        transform.position.y = player_rect.y + player_rect.height * origin.y;
+        transform.position -= original_position - player_rect.position();
     }
 
     let duration = start.elapsed();
@@ -471,40 +509,113 @@ fn update_camera_offset(mut ev_resize: EventReader<ResizeEvent>, mut camera: Sin
     }
 }
 
+fn ensure_global_transform_system(
+    q: Query<(Entity, &Transform), Without<GlobalTransform>>,
+    mut commands: Commands,
+) {
+    for (e, t) in q.iter() {
+        commands
+            .entity(e)
+            .insert_if_new(GlobalTransform::from_root(t));
+    }
+}
+
+// Iterative system for propagating GlobalTransforms
+fn update_global_transforms_system(
+    mut query: ParamSet<(
+        Query<(&Transform, &mut GlobalTransform, Option<&Children>), Changed<Transform>>,
+        Query<(&Transform, &mut GlobalTransform, Option<&Children>)>,
+    )>,
+) {
+    // Stack for iterative traversal: (parent_global, child_entity)
+    let mut stack = Vec::new();
+
+    // Push roots onto stack
+    for (local, mut global, children) in &mut query.p0() {
+        *global = GlobalTransform::from_root(local);
+
+        if let Some(children) = children {
+            for &child in children {
+                stack.push((Some(*global), child));
+            }
+        }
+    }
+
+    // Traverse hierarchy iteratively
+    while let Some((parent_gt_opt, entity)) = stack.pop() {
+        let mut p1 = query.p1();
+        let Ok((local, mut gt, children)) = p1.get_mut(entity) else {
+            continue;
+        };
+
+        *gt = if let Some(parent_gt) = parent_gt_opt {
+            GlobalTransform::from_local(&parent_gt, local)
+        } else {
+            GlobalTransform::from_root(local)
+        };
+
+        if let Some(children) = children {
+            for &child in children {
+                stack.push((Some(*gt), child));
+            }
+        }
+    }
+}
+
+fn sync_collider_with_sprite_system(
+    mut q: Query<
+        (&mut Collider, &Sprite, &GlobalTransform),
+        (
+            With<SyncColliderWithSprite>,
+            Or<(Changed<Sprite>, Changed<GlobalTransform>)>,
+        ),
+    >,
+) {
+    for (mut collider, sprite, gt) in q.iter_mut() {
+        let origin = sprite.get_origin_vector();
+        match sprite.kind {
+            SpriteKind::Rectangle { size, .. } => {
+                collider.offset = Vector2::new(
+                    size.0 * origin.x * gt.scale.x,
+                    size.1 * origin.y * gt.scale.y,
+                ) * -1;
+            }
+            _ => {}
+        }
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn update_spatial_hash_system(
     mut spatial_hash: ResMut<SpatialHash>,
-    mut event_r: EventReader<UpdateSpatialHash>,
-    query: Query<(Entity, &Sprite, &Transform)>,
+    query: Query<(Entity, &Sprite, &Transform), Changed<Transform>>,
 ) {
-    for ev in event_r.read() {
-        if let Ok((entity, sprite, transform)) = query.get(ev.0) {
-            let origin = sprite.get_origin_vector();
-            let rect = match &sprite.kind {
-                SpriteKind::Rectangle { size: shape, .. } => Rectangle {
-                    x: transform.position.x - (shape.0 * transform.scale.x) * origin.x,
-                    y: transform.position.y - (shape.1 * transform.scale.y) * origin.y,
-                    width: shape.0 * transform.scale.x,
-                    height: shape.1 * transform.scale.y,
-                },
-                SpriteKind::Circle { radius, .. } => Rectangle {
-                    x: transform.position.x - (radius * transform.scale.x) * origin.x,
-                    y: transform.position.y - (radius * transform.scale.y) * origin.y,
-                    width: radius * transform.scale.x,
-                    height: radius * transform.scale.y,
-                },
-                _ => continue,
-            };
+    for (entity, sprite, transform) in query {
+        let origin = sprite.get_origin_vector();
+        let rect = match &sprite.kind {
+            SpriteKind::Rectangle { size: shape, .. } => Rectangle {
+                x: transform.position.x - (shape.0 * transform.scale.x) * origin.x,
+                y: transform.position.y - (shape.1 * transform.scale.y) * origin.y,
+                width: shape.0 * transform.scale.x,
+                height: shape.1 * transform.scale.y,
+            },
+            SpriteKind::Circle { radius, .. } => Rectangle {
+                x: transform.position.x - (radius * transform.scale.x) * origin.x,
+                y: transform.position.y - (radius * transform.scale.y) * origin.y,
+                width: radius * transform.scale.x,
+                height: radius * transform.scale.y,
+            },
+            _ => continue,
+        };
 
-            spatial_hash.update(entity, rect);
-        }
+        spatial_hash.update(entity, rect);
     }
 }
 
 fn render_system(
     mut window: ResMut<WindowResource>,
     layer_rt: Res<LayerTextures>,
-    text: Query<(&Text, &Transform)>,
+    text: Query<(&Text, &GlobalTransform)>,
 ) {
     let screen_size = window.get_screen_size();
     window.draw(|d| {
@@ -542,7 +653,7 @@ fn render_system(
 fn render_layers(
     mut window: ResMut<WindowResource>,
     mut layer_rt: ResMut<LayerTextures>,
-    sprite_q: Query<(&Sprite, &Transform, &Layer), With<OnScreen>>,
+    sprite_q: Query<(&Sprite, &GlobalTransform, &Layer), With<OnScreen>>,
     camera: Single<&Camera, With<ActiveCamera>>,
 ) {
     let sprites: Vec<_> = sprite_q.iter().collect();
@@ -551,7 +662,7 @@ fn render_layers(
     let mut sprites_map = sprites
         .par_iter()
         .fold(
-            HashMap::<u32, Vec<(&Sprite, &Transform)>>::new,
+            HashMap::<u32, Vec<(&Sprite, &GlobalTransform)>>::new,
             |mut map, (sprite, transform, layer)| {
                 map.entry(layer.0).or_default().push((*sprite, *transform));
                 map
@@ -604,10 +715,7 @@ fn render_layers(
                         }
                         SpriteKind::Circle { radius } => {
                             d.draw_circle(
-                                Vector2 {
-                                    x: transform.position.x,
-                                    y: transform.position.y,
-                                },
+                                transform.position,
                                 radius * transform.scale.x,
                                 sprite.color,
                             );
