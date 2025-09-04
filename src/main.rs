@@ -145,7 +145,7 @@ fn main() {
     //     SyncColliderWithSprite,
     // ));
 
-    const TO_SPAWN: usize = 5_000_000 / 5;
+    const TO_SPAWN: usize = 500_000 / 5;
 
     (0..5).for_each(|i| {
         (0..TO_SPAWN).for_each(|j| {
@@ -442,8 +442,14 @@ fn apply_velocity_system(
 fn move_camera_to_target_system(
     mut camera: Single<&mut Camera, With<ActiveCamera>>,
     target: Single<&Transform, With<CameraTarget>>,
+    window: Res<WindowResource>,
 ) {
     camera.target = target.position;
+
+    let mouse_scroll = window.get_mouse_wheel_move() / 10.0;
+    if mouse_scroll != 0.0 {
+        camera.zoom = (camera.zoom + mouse_scroll).clamp(0.0, 5.0);
+    }
 }
 
 fn update_count_text_system(
@@ -473,8 +479,8 @@ fn update_on_screen_system(
     let on_screen_entities = spatial_hash.query(Rectangle {
         x: min_x - extra_offset,
         y: min_y - extra_offset,
-        width: screen_size.x + extra_offset,
-        height: screen_size.y + extra_offset,
+        width: screen_size.x + extra_offset * 2.0,
+        height: screen_size.y + extra_offset * 2.0,
     });
 
     on_screen_q.iter().for_each(|entity| {
@@ -603,7 +609,7 @@ fn update_spatial_hash_system(
     mut spatial_hash: ResMut<SpatialHash>,
     query: Query<(Entity, &Sprite, &Transform), Changed<Transform>>,
 ) {
-    for (entity, sprite, transform) in query.iter().take(10_000) {
+    for (entity, sprite, transform) in query.iter() {
         let origin = sprite.get_origin_vector();
         let rect = match &sprite.kind {
             SpriteKind::Rectangle { size: shape, .. } => Rectangle {
