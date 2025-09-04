@@ -14,6 +14,10 @@ mod spatial_hash;
 fn init_world(world: &mut World) {
     world.insert_resource(spatial_hash::SpatialHash::new(96.0));
     world.insert_resource(Events::<ResizeEvent>::default());
+    world.insert_resource(DebugSettings {
+        origins: false,
+        colliders: true,
+    });
     world.init_resource::<LayerTextures>();
 
     world.insert_resource(WindowSize(Vector2i { x: 1024, y: 768 }));
@@ -43,9 +47,6 @@ fn cleanup_world(world: &mut World) {
 
 #[derive(Component)]
 struct SyncColliderWithSprite;
-
-#[derive(Component)]
-struct TestEntity;
 
 fn main() {
     let mut world = World::default();
@@ -83,64 +84,72 @@ fn main() {
         move_camera_to_target_system,
         update_count_text_system,
         check_for_resize_system,
+        debug_toggle_system,
     ));
 
-    world.init_resource::<Events<UpdateSpatialHash>>();
-    let mut spawn_events = world
-        .remove_resource::<Events<UpdateSpatialHash>>()
-        .unwrap();
-
-    {
-        let player = world.spawn((
-            SpriteBundle {
-                sprite: Sprite {
-                    kind: SpriteKind::Rectangle {
-                        size: (32.0, 32.0),
-                        lines: false,
-                    },
-                    color: Color::RED,
-                    origin: SpriteOrigin::Custom(Vector2::new(1.0, 1.0)),
-                },
-                transform: Transform {
-                    position: Vector2 { x: 50.0, y: 50.0 },
-                    ..Default::default()
-                },
+    world.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                kind: SpriteKind::Circle { radius: 40.0 },
+                color: Color::RED,
+                origin: SpriteOrigin::Bottom,
+            },
+            transform: Transform {
+                position: Vector2 { x: 50.0, y: 50.0 },
                 ..Default::default()
             },
-            Velocity::default(),
-            Player,
-            OnScreen,
-            CameraTarget,
-            Collider::default(),
-            SyncColliderWithSprite,
-        ));
+            ..Default::default()
+        },
+        Velocity::default(),
+        OnScreen,
+        Collider::default(),
+        SyncColliderWithSprite,
+    ));
 
-        spawn_events.send(UpdateSpatialHash(player.id()));
-    }
-
-    {
-        let platform = world.spawn((
-            SpriteBundle {
-                transform: Transform {
-                    position: Vector2 { x: 100., y: 100. },
-                    scale: Vector2 { x: 40.0, y: 1.0 },
-                    ..Default::default()
+    world.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                kind: SpriteKind::Rectangle {
+                    size: (32.0, 32.0),
+                    lines: false,
                 },
+                color: Color::RED,
+                origin: SpriteOrigin::BottomRight,
+            },
+            transform: Transform {
+                position: Vector2 { x: 50.0, y: 50.0 },
                 ..Default::default()
             },
-            Velocity(Vector2::new(2.0, -2.0)),
-            OnScreen,
-            Collider::default(),
-            SyncColliderWithSprite,
-        ));
-        spawn_events.send(UpdateSpatialHash(platform.id()));
-    }
+            ..Default::default()
+        },
+        Velocity::default(),
+        Player,
+        OnScreen,
+        CameraTarget,
+        Collider::default(),
+        SyncColliderWithSprite,
+    ));
 
-    const TO_SPAWN: usize = 5 / 5;
+    // world.spawn((
+    //     SpriteBundle {
+    //         transform: Transform {
+    //             position: Vector2 { x: 100., y: 100. },
+    //             scale: Vector2 { x: 40.0, y: 1.0 },
+    //             ..Default::default()
+    //         },
+    //         ..Default::default()
+    //     },
+    //     Velocity(Vector2::new(2.0, -2.0)),
+    //     OnScreen,
+    //     Collider::default(),
+    //     SyncColliderWithSprite,
+    // ));
+
+    const TO_SPAWN: usize = 5_000_000 / 5;
 
     (0..5).for_each(|i| {
         (0..TO_SPAWN).for_each(|j| {
-            let entity = world.spawn((
+            world.spawn((
                 SpriteBundle {
                     sprite: Sprite {
                         origin: SpriteOrigin::Custom((0.0, 0.0).into()),
@@ -158,12 +167,8 @@ fn main() {
                 Collider::default(),
                 SyncColliderWithSprite,
             ));
-
-            spawn_events.send(UpdateSpatialHash(entity.id()));
         });
     });
-
-    world.insert_resource(spawn_events);
 
     world.spawn((
         Transform::default(),
@@ -244,80 +249,83 @@ fn move_player_system(
     velocity.0 = m;
 }
 
+enum CollisionShape {
+    Rect(Rectangle),
+}
+
 #[allow(clippy::type_complexity)]
 fn apply_velocity_system(
-    mut update_spatial_hash: EventWriter<UpdateSpatialHash>,
     mut movers_q: Query<(
-        Entity,
         &mut Transform,
         &GlobalTransform,
         &Velocity,
         Option<&Collider>,
     )>,
-    static_colliders: Query<(&Collider, &GlobalTransform), Without<Velocity>>,
+    static_colliders: Query<(&Collider, &GlobalTransform), (With<OnScreen>, Without<Velocity>)>,
 ) {
     // Record how much time this took
-    let start = std::time::Instant::now();
+    // let start = std::time::Instant::now();
 
     // Precompute all static colliders
-    let static_rects: Vec<_> = static_colliders
+    let static_rects = static_colliders
         .iter()
         .map(|(collider, collider_gt)| {
             let r = match collider.kind {
-                ColliderKind::Rectangle(size) => Rectangle {
-                    x: collider_gt.position.x + collider.offset.x,
-                    y: collider_gt.position.y + collider.offset.y,
+                ColliderKind::Rectangle(size) => CollisionShape::Rect(Rectangle {
+                    x: collider_gt.position.x - collider.offset.x,
+                    y: collider_gt.position.y - collider.offset.y,
                     width: size.x * collider_gt.scale.x,
                     height: size.y * collider_gt.scale.y,
-                },
+                }),
             };
 
             r
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     let mut moving_rects = movers_q
         .iter_mut()
-        .filter_map(|(m_entity, mut t, gt, v, collider)| {
+        .filter_map(|(mut t, gt, v, collider)| {
             let Some(collider) = collider else {
                 t.position += v.0;
-                // update_spatial_hash.write(UpdateSpatialHash(m_entity));
                 return None;
             };
 
             let r = match collider.kind {
                 ColliderKind::Rectangle(size) => Rectangle {
-                    x: gt.position.x + collider.offset.x,
-                    y: gt.position.y + collider.offset.y,
+                    x: gt.position.x - collider.offset.x,
+                    y: gt.position.y - collider.offset.y,
                     width: size.x * gt.scale.x,
                     height: size.y * gt.scale.y,
                 },
             };
 
-            Some((m_entity, r, t, v))
+            Some((r, t, v))
         })
         .collect::<Vec<_>>();
 
     for i in 0..moving_rects.len() {
         let (left, right) = moving_rects.split_at_mut(i);
-        let ((p_entity, player_rect, transform, velocity), rest) = right.split_first_mut().unwrap();
+        let ((player_rect, transform, velocity), rest) = right.split_first_mut().unwrap();
         let original_position = player_rect.position();
-        let mut did_move = false;
 
         if velocity.x != 0.0 || velocity.y != 0.0 {
-            did_move = true;
             player_rect.x += velocity.x;
             for static_rect in static_rects.iter() {
-                if player_rect.collides_rect(static_rect) {
-                    if velocity.x > 0.0 {
-                        player_rect.x = static_rect.x - player_rect.width; // stop right before left wall
-                    } else if velocity.x < 0.0 {
-                        player_rect.x = static_rect.x + static_rect.width; // stop right before right wall
+                match static_rect {
+                    CollisionShape::Rect(static_rect) => {
+                        if player_rect.collides_rect(static_rect) {
+                            if velocity.x > 0.0 {
+                                player_rect.x = static_rect.x - player_rect.width; // stop right before left wall
+                            } else if velocity.x < 0.0 {
+                                player_rect.x = static_rect.x + static_rect.width; // stop right before right wall
+                            }
+                        }
                     }
                 }
             }
 
-            for (_, moving_rect, ..) in left.iter().chain(rest.iter()) {
+            for (moving_rect, ..) in left.iter().chain(rest.iter()) {
                 if player_rect.collides_rect(moving_rect) {
                     if velocity.x > 0.0 {
                         player_rect.x = moving_rect.x - player_rect.width; // stop right before left wall
@@ -329,16 +337,20 @@ fn apply_velocity_system(
 
             player_rect.y += velocity.y;
             for static_rect in static_rects.iter() {
-                if player_rect.collides_rect(static_rect) {
-                    if velocity.y > 0.0 {
-                        player_rect.y = static_rect.y - player_rect.height; // stop above floor
-                    } else if velocity.y < 0.0 {
-                        player_rect.y = static_rect.y + static_rect.height; // stop below ceiling
+                match static_rect {
+                    CollisionShape::Rect(static_rect) => {
+                        if player_rect.collides_rect(static_rect) {
+                            if velocity.y > 0.0 {
+                                player_rect.y = static_rect.y - player_rect.height; // stop above floor
+                            } else if velocity.y < 0.0 {
+                                player_rect.y = static_rect.y + static_rect.height; // stop below ceiling
+                            }
+                        }
                     }
                 }
             }
 
-            for (_, moving_rect, ..) in left.iter().chain(rest.iter()) {
+            for (moving_rect, ..) in left.iter().chain(rest.iter()) {
                 if player_rect.collides_rect(moving_rect) {
                     if velocity.y > 0.0 {
                         player_rect.y = moving_rect.y - player_rect.height; // stop above floor
@@ -350,36 +362,41 @@ fn apply_velocity_system(
         } else {
             // No velocity position check
             for static_rect in static_rects.iter() {
-                if player_rect.collides_rect(static_rect) {
-                    // Compute overlap along X and Y
-                    let delta_x = (player_rect.x + player_rect.width / 2.0)
-                        - (static_rect.x + static_rect.width / 2.0);
-                    let delta_y = (player_rect.y + player_rect.height / 2.0)
-                        - (static_rect.y + static_rect.height / 2.0);
-                    let intersect_x = (player_rect.width + static_rect.width) / 2.0 - delta_x.abs();
-                    let intersect_y =
-                        (player_rect.height + static_rect.height) / 2.0 - delta_y.abs();
+                match static_rect {
+                    CollisionShape::Rect(static_rect) => {
+                        if player_rect.collides_rect(static_rect) {
+                            // Compute overlap along X and Y
+                            let delta_x = (player_rect.x + player_rect.width / 2.0)
+                                - (static_rect.x + static_rect.width / 2.0);
+                            let delta_y = (player_rect.y + player_rect.height / 2.0)
+                                - (static_rect.y + static_rect.height / 2.0);
+                            let intersect_x =
+                                (player_rect.width + static_rect.width) / 2.0 - delta_x.abs();
+                            let intersect_y =
+                                (player_rect.height + static_rect.height) / 2.0 - delta_y.abs();
 
-                    // Only push along the axis of least penetration
-                    if intersect_x < intersect_y {
-                        // X axis
-                        if delta_x > 0.0 {
-                            player_rect.x += intersect_x;
-                        } else {
-                            player_rect.x -= intersect_x;
-                        }
-                    } else {
-                        // Y axis
-                        if delta_y > 0.0 {
-                            player_rect.y += intersect_y;
-                        } else {
-                            player_rect.y -= intersect_y;
+                            // Only push along the axis of least penetration
+                            if intersect_x < intersect_y {
+                                // X axis
+                                if delta_x > 0.0 {
+                                    player_rect.x += intersect_x;
+                                } else {
+                                    player_rect.x -= intersect_x;
+                                }
+                            } else {
+                                // Y axis
+                                if delta_y > 0.0 {
+                                    player_rect.y += intersect_y;
+                                } else {
+                                    player_rect.y -= intersect_y;
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            for (_, moving_rect, _, mover_velocity) in left.iter().chain(rest.iter()) {
+            for (moving_rect, _, mover_velocity) in left.iter().chain(rest.iter()) {
                 // If the other entity has velocity, we will handle the collision then
                 if mover_velocity.x == 0.0
                     && mover_velocity.y == 0.0
@@ -410,21 +427,16 @@ fn apply_velocity_system(
                             player_rect.y -= intersect_y;
                         }
                     }
-                    did_move = true;
                 }
             }
-        }
-
-        if did_move {
-            update_spatial_hash.write(UpdateSpatialHash(*p_entity));
         }
 
         // Update the actual position based on resolved rectangle
         transform.position -= original_position - player_rect.position();
     }
 
-    let duration = start.elapsed();
-    println!("Collision detection took: {duration:?}");
+    // let duration = start.elapsed();
+    // println!("Collision detection took: {duration:?}");
 }
 
 fn move_camera_to_target_system(
@@ -451,6 +463,7 @@ fn update_on_screen_system(
     on_screen_q: Query<Entity, With<OnScreen>>,
     mut commands: Commands,
 ) {
+    let extra_offset = 1000.0f32;
     let screen_size = window.get_screen_size().to_vector2();
     let (min_x, min_y) = (
         camera.target.x - camera.offset.x,
@@ -458,10 +471,10 @@ fn update_on_screen_system(
     );
 
     let on_screen_entities = spatial_hash.query(Rectangle {
-        x: min_x,
-        y: min_y,
-        width: screen_size.x,
-        height: screen_size.y,
+        x: min_x - extra_offset,
+        y: min_y - extra_offset,
+        width: screen_size.x + extra_offset,
+        height: screen_size.y + extra_offset,
     });
 
     on_screen_q.iter().for_each(|entity| {
@@ -485,6 +498,12 @@ fn check_for_resize_system(
             to: new_size,
         });
         current_size.0 = new_size;
+    }
+}
+
+fn debug_toggle_system(mut debug_settings: ResMut<DebugSettings>, window: Res<WindowResource>) {
+    if window.is_key_pressed(KeyboardKey::O) {
+        debug_settings.origins = !debug_settings.origins;
     }
 }
 
@@ -571,16 +590,10 @@ fn sync_collider_with_sprite_system(
         ),
     >,
 ) {
-    for (mut collider, sprite, gt) in q.iter_mut() {
+    for (mut collider, sprite, transform) in q.iter_mut() {
         let origin = sprite.get_origin_vector();
-        match sprite.kind {
-            SpriteKind::Rectangle { size, .. } => {
-                collider.offset = Vector2::new(
-                    size.0 * origin.x * gt.scale.x,
-                    size.1 * origin.y * gt.scale.y,
-                ) * -1;
-            }
-            _ => {}
+        collider.offset = match collider.kind {
+            ColliderKind::Rectangle(size) => size * origin * transform.scale,
         }
     }
 }
@@ -590,7 +603,7 @@ fn update_spatial_hash_system(
     mut spatial_hash: ResMut<SpatialHash>,
     query: Query<(Entity, &Sprite, &Transform), Changed<Transform>>,
 ) {
-    for (entity, sprite, transform) in query {
+    for (entity, sprite, transform) in query.iter().take(10_000) {
         let origin = sprite.get_origin_vector();
         let rect = match &sprite.kind {
             SpriteKind::Rectangle { size: shape, .. } => Rectangle {
@@ -653,8 +666,10 @@ fn render_system(
 fn render_layers(
     mut window: ResMut<WindowResource>,
     mut layer_rt: ResMut<LayerTextures>,
+    debug_settings: Res<DebugSettings>,
     sprite_q: Query<(&Sprite, &GlobalTransform, &Layer), With<OnScreen>>,
     camera: Single<&Camera, With<ActiveCamera>>,
+    colliders: Query<(&Collider, &GlobalTransform), With<OnScreen>>,
 ) {
     let sprites: Vec<_> = sprite_q.iter().collect();
     // This created a map for each thread with all the sprites in that thread
@@ -690,9 +705,9 @@ fn render_layers(
             {
                 let d = d.begin_mode_2d(&camera);
                 for (sprite, transform) in sprites.iter() {
+                    let origin = sprite.get_origin_vector();
                     match &sprite.kind {
                         SpriteKind::Rectangle { size, lines } => {
-                            let origin = sprite.get_origin_vector();
                             let mut dest = Rectangle {
                                 x: transform.position.x,
                                 y: transform.position.y,
@@ -711,14 +726,16 @@ fn render_layers(
                                     sprite.color,
                                 );
                             }
-                            d.draw_circle(transform.position, 2.0, Color::BLUE);
                         }
                         SpriteKind::Circle { radius } => {
-                            d.draw_circle(
-                                transform.position,
-                                radius * transform.scale.x,
-                                sprite.color,
-                            );
+                            let radius = *radius * transform.scale;
+                            let diameter = radius * 2.0;
+                            let center = transform.position + (radius - diameter * origin);
+
+                            match transform.scale.x == transform.scale.y {
+                                true => d.draw_circle(center, radius.x, sprite.color),
+                                false => d.draw_ellipse(center.to_vector2i(), radius, sprite.color),
+                            }
                         }
                         SpriteKind::Texture { texture } => {
                             let size = texture.size();
@@ -737,10 +754,32 @@ fn render_layers(
                                     height: size.y as f32,
                                 },
                                 dest,
-                                Vector2 { x: 0.0, y: 0.0 },
+                                origin,
                                 transform.rotation,
                                 sprite.color,
                             );
+                        }
+                    }
+                    if debug_settings.origins {
+                        d.draw_circle(transform.position, 2.0, Color::BLUE);
+                    }
+                }
+
+                if debug_settings.colliders {
+                    for (collider, transform) in colliders.iter() {
+                        let pos = transform.position - collider.offset;
+                        match collider.kind {
+                            ColliderKind::Rectangle(size) => {
+                                d.draw_rect_lines(
+                                    Rectangle {
+                                        x: pos.x,
+                                        y: pos.y,
+                                        width: size.x,
+                                        height: size.y,
+                                    },
+                                    Color::ORANGE,
+                                );
+                            }
                         }
                     }
                 }

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use bevy_ecs::prelude::*;
 use rustyray::prelude::*;
 
@@ -47,7 +49,7 @@ pub enum SpriteOrigin {
     Top,
     TopRight,
     Left,
-    Middle,
+    Center,
     Right,
     BottomLeft,
     #[default]
@@ -80,7 +82,7 @@ impl Sprite {
             SpriteOrigin::Top => Vector2::new(0.5, 0.0),
             SpriteOrigin::TopRight => Vector2::new(1.0, 0.0),
             SpriteOrigin::Left => Vector2::new(0.0, 0.5),
-            SpriteOrigin::Middle => Vector2::new(0.5, 0.5),
+            SpriteOrigin::Center => Vector2::new(0.5, 0.5),
             SpriteOrigin::Right => Vector2::new(1.0, 0.5),
             SpriteOrigin::BottomLeft => Vector2::new(0.0, 1.0),
             SpriteOrigin::Bottom => Vector2::new(0.5, 1.0),

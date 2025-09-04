@@ -6,6 +6,12 @@ use rustyray::prelude::*;
 #[derive(Resource)]
 pub struct WindowResource(pub Window);
 
+#[derive(Resource)]
+pub struct DebugSettings {
+    pub origins: bool,
+    pub colliders: bool,
+}
+
 impl std::ops::Deref for WindowResource {
     type Target = Window;
 
@@ -63,6 +69,3 @@ impl Time {
         self.delta
     }
 }
-
-#[derive(Event)]
-pub struct UpdateSpatialHash(pub Entity);
