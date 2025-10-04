@@ -470,7 +470,7 @@ fn update_on_screen_system(
     mut commands: Commands,
 ) {
     let extra_offset = 1000.0f32;
-    let screen_size = window.get_screen_size().to_vector2();
+    let screen_size = window.screen_size().to_vector2();
     let (min_x, min_y) = (
         camera.target.x - camera.offset.x,
         camera.target.y - camera.offset.y,
@@ -496,8 +496,8 @@ fn check_for_resize_system(
     mut current_size: ResMut<WindowSize>,
     mut ev_resize: EventWriter<ResizeEvent>,
 ) {
-    if window.get_screen_size() != current_size.0 {
-        let new_size = window.get_screen_size();
+    if window.screen_size() != current_size.0 {
+        let new_size = window.screen_size();
         println!("Window resized to {}x{}", new_size.x, new_size.y);
         ev_resize.write(ResizeEvent {
             from: current_size.0,
@@ -636,7 +636,7 @@ fn render_system(
     layer_rt: Res<LayerTextures>,
     text: Query<(&Text, &GlobalTransform)>,
 ) {
-    let screen_size = window.get_screen_size();
+    let screen_size = window.screen_size();
     window.draw(|d| {
         d.clear(Color::CORNFLOWERBLUE);
 
