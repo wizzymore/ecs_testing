@@ -9,7 +9,7 @@ once = []
 [dependencies]
 bevy_ecs = { version = "0.16.1", features = ["multi_threaded"] }
 rayon = "1.11.0"
-rustyray = { version = "0.1.4", path = "../rustyray/rustyray" }
+rustyray = { version = "*", path = "../rustyray/rustyray" }
 
 # Enable max optimizations for dependencies, but not for our code:
 [profile.dev.package."*"]

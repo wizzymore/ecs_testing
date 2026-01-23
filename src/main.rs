@@ -269,17 +269,13 @@ fn apply_velocity_system(
     // Precompute all static colliders
     let static_rects = static_colliders
         .iter()
-        .map(|(collider, collider_gt)| {
-            let r = match collider.kind {
-                ColliderKind::Rectangle(size) => CollisionShape::Rect(Rectangle {
-                    x: collider_gt.position.x - collider.offset.x,
-                    y: collider_gt.position.y - collider.offset.y,
-                    width: size.x * collider_gt.scale.x,
-                    height: size.y * collider_gt.scale.y,
-                }),
-            };
-
-            r
+        .map(|(collider, collider_gt)| match collider.kind {
+            ColliderKind::Rectangle(size) => CollisionShape::Rect(Rectangle {
+                x: collider_gt.position.x - collider.offset.x,
+                y: collider_gt.position.y - collider.offset.y,
+                width: size.x * collider_gt.scale.x,
+                height: size.y * collider_gt.scale.y,
+            }),
         })
         .collect::<Vec<_>>();
 
@@ -446,7 +442,7 @@ fn move_camera_to_target_system(
 ) {
     camera.target = target.position;
 
-    let mouse_scroll = window.get_mouse_wheel_move() / 10.0;
+    let mouse_scroll = window.mouse_wheel_move() / 10.0;
     if mouse_scroll != 0.0 {
         camera.zoom = (camera.zoom + mouse_scroll).clamp(0.0, 5.0);
     }
@@ -470,7 +466,7 @@ fn update_on_screen_system(
     mut commands: Commands,
 ) {
     let extra_offset = 1000.0f32;
-    let screen_size = window.get_screen_size().to_vector2();
+    let screen_size = window.screen_size().to_vector2();
     let (min_x, min_y) = (
         camera.target.x - camera.offset.x,
         camera.target.y - camera.offset.y,
@@ -496,7 +492,7 @@ fn check_for_resize_system(
     mut current_size: ResMut<WindowSize>,
     mut ev_resize: EventWriter<ResizeEvent>,
 ) {
-    let new_size = window.get_screen_size();
+    let new_size = window.screen_size();
     if new_size != current_size.0 {
         println!("Window resized to {}x{}", new_size.x, new_size.y);
         ev_resize.write(ResizeEvent {
@@ -546,6 +542,7 @@ fn ensure_global_transform_system(
 }
 
 // Iterative system for propagating GlobalTransforms
+#[allow(clippy::type_complexity)]
 fn update_global_transforms_system(
     mut query: ParamSet<(
         Query<(&Transform, &mut GlobalTransform, Option<&Children>), Changed<Transform>>,
@@ -587,6 +584,7 @@ fn update_global_transforms_system(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn sync_collider_with_sprite_system(
     mut q: Query<
         (&mut Collider, &Sprite, &GlobalTransform),
@@ -604,7 +602,6 @@ fn sync_collider_with_sprite_system(
     }
 }
 
-#[allow(clippy::type_complexity)]
 fn update_spatial_hash_system(
     mut spatial_hash: ResMut<SpatialHash>,
     query: Query<(Entity, &Sprite, &Transform), Changed<Transform>>,
@@ -636,7 +633,7 @@ fn render_system(
     layer_rt: Res<LayerTextures>,
     text: Query<(&Text, &GlobalTransform)>,
 ) {
-    let screen_size = window.get_screen_size();
+    let screen_size = window.screen_size();
     window.draw(|d| {
         d.clear(Color::CORNFLOWERBLUE);
 
