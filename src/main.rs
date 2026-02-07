@@ -129,7 +129,7 @@ fn main() {
                 origin: SpriteOrigin::Bottom,
             },
             transform: Transform {
-                position: Vector2 { x: 50.0, y: 50.0 },
+                position: Vector2 { x: 50.0, y: 1000.0 },
                 ..Default::default()
             },
             ..Default::default()
@@ -319,23 +319,15 @@ fn apply_velocity_system(
         &Velocity,
         Option<&Collider>,
     )>,
-    static_colliders: Query<(&Collider, &GlobalTransform), (With<OnScreen>, Without<Velocity>)>,
+    static_colliders: Query<(&Collider, &GlobalTransform), Without<Velocity>>,
+    spatial_hash: Res<SpatialHash>,
+    mut metrics: ResMut<Metrics>,
 ) {
+    let start = std::time::Instant::now();
     // Record how much time this took
     // let start = std::time::Instant::now();
 
-    // Precompute all static colliders
-    let static_rects = static_colliders
-        .iter()
-        .map(|(collider, collider_gt)| match collider.kind {
-            ColliderKind::Rectangle(size) => CollisionShape::Rect(Rectangle {
-                x: collider_gt.position.x - collider.offset.x,
-                y: collider_gt.position.y - collider.offset.y,
-                width: size.x * collider_gt.scale.x,
-                height: size.y * collider_gt.scale.y,
-            }),
-        })
-        .collect::<Vec<_>>();
+    // TO DO: Also check the spatial hash for moving rects or something so we don't do O(n)
 
     let mut moving_rects = movers_q
         .iter_mut()
@@ -362,6 +354,25 @@ fn apply_velocity_system(
         let (left, right) = moving_rects.split_at_mut(i);
         let ((player_rect, transform, velocity), rest) = right.split_first_mut().unwrap();
         let original_position = player_rect.position();
+        // Precompute all static colliders
+        let static_rects = spatial_hash
+            .query(*player_rect)
+            .iter()
+            .filter_map(|&e| {
+                if let Ok((collider, collider_gt)) = static_colliders.get(e) {
+                    return match collider.kind {
+                        ColliderKind::Rectangle(size) => Some(CollisionShape::Rect(Rectangle {
+                            x: collider_gt.position.x - collider.offset.x,
+                            y: collider_gt.position.y - collider.offset.y,
+                            width: size.x * collider_gt.scale.x,
+                            height: size.y * collider_gt.scale.y,
+                        })),
+                    };
+                }
+
+                None
+            })
+            .collect::<Vec<_>>();
 
         if velocity.x != 0.0 || velocity.y != 0.0 {
             player_rect.x += velocity.x;
@@ -491,6 +502,7 @@ fn apply_velocity_system(
 
     // let duration = start.elapsed();
     // println!("Collision detection took: {duration:?}");
+    metrics.apply_velocity_system_time = start.elapsed();
 }
 
 fn move_camera_to_target_system(
@@ -692,9 +704,7 @@ fn sync_collider_with_sprite_system(
 fn update_spatial_hash_system(
     mut spatial_hash: ResMut<SpatialHash>,
     query: Query<(Entity, &Sprite, &Transform), Changed<Transform>>,
-    mut metrics: ResMut<Metrics>,
 ) {
-    let start = std::time::Instant::now();
     for (entity, sprite, transform) in query.iter() {
         let origin = sprite.get_origin_vector();
         let rect = match &sprite.kind {
@@ -715,7 +725,6 @@ fn update_spatial_hash_system(
 
         spatial_hash.update(entity, rect);
     }
-    metrics.spatial_hash_update_time = start.elapsed();
 }
 
 fn render_system(
@@ -761,8 +770,8 @@ fn render_system(
         drop(_draw_texts_span);
         d.draw_text(
             &format!(
-                "Spatial Hash Update Time: {:.2}ms",
-                metrics.spatial_hash_update_time.as_secs_f32() * 1000.0,
+                "Apply Velocity System: {:.2}ms",
+                metrics.apply_velocity_system_time.as_secs_f32() * 1000.0,
             ),
             200,
             screen_size.y - 25,

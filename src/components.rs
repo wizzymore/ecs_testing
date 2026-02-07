@@ -207,7 +207,7 @@ pub struct SpriteBundle {
     pub layer: Layer,
 }
 
-#[derive(Debug, Component, Default)]
+#[derive(Debug, Component, Default, Clone, Copy)]
 pub struct Velocity(pub Vector2);
 
 impl std::ops::Deref for Velocity {

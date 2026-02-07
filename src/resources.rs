@@ -5,7 +5,7 @@ use rustyray::prelude::*;
 
 #[derive(Resource, Default)]
 pub struct Metrics {
-    pub spatial_hash_update_time: std::time::Duration,
+    pub apply_velocity_system_time: std::time::Duration,
     pub update_on_screen_system_time: std::time::Duration,
 }
 
