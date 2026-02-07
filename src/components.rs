@@ -200,6 +200,9 @@ pub struct Player;
 #[derive(Component, Default)]
 pub struct Layer(pub u32);
 
+#[derive(Component)]
+pub struct SyncColliderWithSprite;
+
 #[derive(Bundle, Default)]
 pub struct SpriteBundle {
     pub sprite: Sprite,

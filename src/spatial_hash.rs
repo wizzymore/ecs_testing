@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::{entity::Entity, resource::Resource};
 use rustyray::prelude::Rectangle;
+#[cfg(feature = "trace")]
 use tracing::info_span;
 
 #[derive(Default, Resource)]
@@ -49,6 +50,7 @@ impl SpatialHash {
     }
 
     pub fn update(&mut self, entity: Entity, new_rect: Rectangle) {
+        #[cfg(feature = "trace")]
         let _span = info_span!("spatial_hash_update").entered();
         let cells = self.cell_coords_rect(new_rect);
 
@@ -73,6 +75,7 @@ impl SpatialHash {
     }
 
     pub fn query(&self, query_rect: Rectangle) -> HashSet<Entity> {
+        #[cfg(feature = "trace")]
         let _span = info_span!("spatial_hash_query").entered();
         let (min_cx, min_cy) = self.cell_coords(query_rect.x, query_rect.y);
         let (max_cx, max_cy) = self.cell_coords(
