@@ -97,6 +97,7 @@ impl Sprite {
 }
 
 #[derive(Component)]
+#[component(storage = "SparseSet")]
 pub struct OnScreen;
 
 #[derive(Debug)]
@@ -127,6 +128,13 @@ pub struct Transform {
     pub position: Vector2,
     pub rotation: f32,
     pub scale: Vector2,
+}
+
+impl Transform {
+    pub fn with_position(mut self, position: Vector2) -> Self {
+        self.position = position;
+        self
+    }
 }
 
 impl Default for Transform {
@@ -183,6 +191,8 @@ pub struct Text {
 
 #[derive(Component)]
 pub struct CountText;
+#[derive(Component)]
+pub struct OnScreenText;
 
 #[derive(Component)]
 pub struct Player;

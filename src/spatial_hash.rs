@@ -1,13 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy_ecs::{entity::Entity, resource::Resource};
 use rustyray::prelude::Rectangle;
+use tracing::info_span;
 
 #[derive(Default, Resource)]
 pub struct SpatialHash {
     pub cell_size: f32,
     pub cells: HashMap<(i32, i32), Vec<Entity>>,
-    pub entities: HashMap<Entity, Rectangle>,
+    pub entities: HashMap<Entity, Vec<(i32, i32)>>,
 }
 
 impl SpatialHash {
@@ -41,35 +42,55 @@ impl SpatialHash {
 
     pub fn insert(&mut self, entity: Entity, rect: Rectangle) {
         let cells = self.cell_coords_rect(rect);
-        for cell in cells {
-            self.cells.entry(cell).or_default().push(entity);
+        for cell in &cells {
+            self.cells.entry(*cell).or_default().push(entity);
         }
-        self.entities.insert(entity, rect);
+        self.entities.insert(entity, cells);
     }
 
     pub fn update(&mut self, entity: Entity, new_rect: Rectangle) {
-        if let Some(rect) = self.entities.get(&entity) {
-            let old_cells = self.cell_coords_rect(*rect);
+        let _span = info_span!("spatial_hash_update").entered();
+        let cells = self.cell_coords_rect(new_rect);
+
+        if let Some(old_cells) = self.entities.get(&entity) {
+            // check if cells are the same
+            if *old_cells == cells {
+                return;
+            }
+
+            // remove from old cells
             for cell in old_cells {
-                if let Some(vec) = self.cells.get_mut(&cell) {
-                    vec.retain(|&eid| eid != entity);
+                if let Some(bucket) = self.cells.get_mut(cell) {
+                    bucket.retain(|&e| e != entity);
+                    if bucket.is_empty() {
+                        self.cells.remove(cell);
+                    }
                 }
             }
         }
 
-        // Insert into new cells
         self.insert(entity, new_rect);
     }
 
-    pub fn query(&self, query_rect: Rectangle) -> Vec<Entity> {
-        let coords = self.cell_coords_rect(query_rect);
+    pub fn query(&self, query_rect: Rectangle) -> HashSet<Entity> {
+        let _span = info_span!("spatial_hash_query").entered();
+        let (min_cx, min_cy) = self.cell_coords(query_rect.x, query_rect.y);
+        let (max_cx, max_cy) = self.cell_coords(
+            query_rect.x + query_rect.width,
+            query_rect.y + query_rect.height,
+        );
 
-        let mut found = Vec::new();
+        let num_cells = ((max_cx - min_cx + 1) * (max_cy - min_cy + 1)) as usize;
 
-        for coord in coords.iter() {
-            if let Some(bucket) = self.cells.get(coord) {
-                for &entity in bucket {
-                    found.push(entity);
+        // Estimate: total entities / used cells, times cells in this query
+        let avg_per_cell = self.entities.len() / self.cells.len().max(1);
+        let capacity = num_cells * avg_per_cell;
+
+        let mut found = HashSet::with_capacity(capacity);
+        for cy in min_cy..=max_cy {
+            for cx in min_cx..=max_cx {
+                if let Some(bucket) = self.cells.get(&(cx, cy)) {
+                    found.extend(bucket);
                 }
             }
         }

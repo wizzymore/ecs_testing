@@ -3,6 +3,12 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::*;
 use rustyray::prelude::*;
 
+#[derive(Resource, Default)]
+pub struct Metrics {
+    pub spatial_hash_update_time: std::time::Duration,
+    pub update_on_screen_system_time: std::time::Duration,
+}
+
 #[derive(Resource)]
 pub struct WindowResource(pub Window);
 
@@ -26,25 +32,13 @@ impl std::ops::DerefMut for WindowResource {
     }
 }
 
-impl Drop for WindowResource {
-    fn drop(&mut self) {
-        println!("WindowResource dropped");
-    }
-}
-
 #[derive(Resource, Default)]
 pub struct LayerTextures(pub HashMap<u32, OwnedRenderTexture>);
-
-impl Drop for LayerTextures {
-    fn drop(&mut self) {
-        println!("LayerTextures dropped");
-    }
-}
 
 #[derive(Resource)]
 pub struct WindowSize(pub Vector2i);
 
-#[derive(Event)]
+#[derive(Message)]
 pub struct ResizeEvent {
     pub from: Vector2i,
     pub to: Vector2i,

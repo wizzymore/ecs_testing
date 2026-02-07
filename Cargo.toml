@@ -5,11 +5,15 @@ edition = "2024"
 
 [features]
 once = []
+trace = ["bevy_ecs/trace"]
 
 [dependencies]
-bevy_ecs = { version = "0.16.1", features = ["multi_threaded"] }
+bevy_ecs = { version = "0.18.0", features = ["multi_threaded"] }
 rayon = "1.11.0"
 rustyray = { version = "*", path = "../rustyray/rustyray" }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-tracy = { version = "0.11", features = ["enable"] }
 
 # Enable max optimizations for dependencies, but not for our code:
 [profile.dev.package."*"]
@@ -23,4 +27,4 @@ opt-level = 1
 # lto = true
 opt-level = 3
 incremental = true
-debug = false
+debug = true
