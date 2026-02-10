@@ -4,45 +4,37 @@ use rustyray::prelude::*;
 use crate::components::*;
 use crate::resources::*;
 use crate::spatial_hash::SpatialHash;
+#[cfg(feature = "trace")]
+use tracing::info_span;
 
 // Iterative system for propagating GlobalTransforms
 #[allow(clippy::type_complexity)]
 pub fn update_global_transforms_system(
-    mut query: ParamSet<(
-        Query<(&Transform, &mut GlobalTransform, Option<&Children>), Changed<Transform>>,
-        Query<(&Transform, &mut GlobalTransform, Option<&Children>)>,
-    )>,
+    mut parents: Query<(&mut GlobalTransform, &Transform, Option<&Children>), Without<ChildOf>>,
+    mut children: Query<(&mut GlobalTransform, &Transform, Option<&Children>), With<ChildOf>>,
 ) {
-    // Stack for iterative traversal: (parent_global, child_entity)
-    let mut stack = Vec::new();
+    let mut stack: Vec<(GlobalTransform, Entity)> = Vec::new();
 
-    // Push roots onto stack
-    for (local, mut global, children) in &mut query.p0() {
+    for (mut global, local, maybe_children) in parents.iter_mut() {
         *global = GlobalTransform::from_root(local);
 
-        if let Some(children) = children {
+        if let Some(children) = maybe_children {
             for &child in children {
-                stack.push((Some(*global), child));
+                stack.push((*global, child));
             }
         }
     }
 
-    // Traverse hierarchy iteratively
-    while let Some((parent_gt_opt, entity)) = stack.pop() {
-        let mut p1 = query.p1();
-        let Ok((local, mut gt, children)) = p1.get_mut(entity) else {
+    while let Some((parent_gt, entity)) = stack.pop() {
+        let Ok((mut global, local, maybe_children)) = children.get_mut(entity) else {
             continue;
         };
 
-        *gt = if let Some(parent_gt) = parent_gt_opt {
-            GlobalTransform::from_local(&parent_gt, local)
-        } else {
-            GlobalTransform::from_root(local)
-        };
+        *global = GlobalTransform::from_local(&parent_gt, local);
 
-        if let Some(children) = children {
+        if let Some(children) = maybe_children {
             for &child in children {
-                stack.push((Some(*gt), child));
+                stack.push((*global, child));
             }
         }
     }
@@ -103,10 +95,6 @@ pub fn apply_velocity_system(
     mut metrics: ResMut<Metrics>,
 ) {
     let start = std::time::Instant::now();
-    // Record how much time this took
-    // let start = std::time::Instant::now();
-
-    // TO DO: Also check the spatial hash for moving rects or something so we don't do O(n)
 
     let mut moving_rects = movers_q
         .iter_mut()
@@ -275,8 +263,10 @@ pub fn apply_velocity_system(
             }
         }
 
-        // Update the actual position based on resolved rectangle
-        transform.position -= original_position - player_rect.position();
+        // Update the actual position based on resolved rectangle (world space)
+        let delta = player_rect.position() - original_position;
+        transform.position.x += delta.x;
+        transform.position.y += delta.y;
     }
 
     // let duration = start.elapsed();
@@ -379,12 +369,18 @@ pub fn check_for_resize_system(
     }
 }
 
-pub fn debug_toggle_system(mut debug_settings: ResMut<DebugSettings>, window: Res<WindowResource>) {
+pub fn debug_toggle_system(
+    mut debug_settings: ResMut<DebugSettings>,
+    mut window: ResMut<WindowResource>,
+) {
     if window.is_key_pressed(KeyboardKey::O) {
         debug_settings.origins = !debug_settings.origins;
     }
     if window.is_key_pressed(KeyboardKey::C) {
         debug_settings.colliders = !debug_settings.colliders;
+    }
+    if window.is_key_pressed(KeyboardKey::F) {
+        window.set_target_fps(50000);
     }
 }
 
@@ -429,17 +425,20 @@ pub fn sync_collider_with_sprite_system(
         ),
     >,
 ) {
-    for (mut collider, sprite, transform) in q.iter_mut() {
+    for (mut collider, sprite, global_transform) in q.iter_mut() {
         let origin = sprite.get_origin_vector();
         collider.offset = match collider.kind {
-            ColliderKind::Rectangle(size) => size * origin * transform.scale,
+            ColliderKind::Rectangle(size) => Vector2::new(
+                (size.x * global_transform.scale.x) * origin.x,
+                (size.y * global_transform.scale.y) * origin.y,
+            ),
         }
     }
 }
 
 pub fn update_spatial_hash_system(
     mut spatial_hash: ResMut<SpatialHash>,
-    query: Query<(Entity, &Sprite, &Transform), Changed<Transform>>,
+    query: Query<(Entity, &Sprite, &GlobalTransform), Changed<GlobalTransform>>,
 ) {
     for (entity, sprite, transform) in query.iter() {
         let origin = sprite.get_origin_vector();

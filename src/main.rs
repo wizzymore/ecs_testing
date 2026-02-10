@@ -8,49 +8,11 @@ use rustyray::prelude::*;
 use systems::*;
 #[cfg(feature = "trace")]
 use tracing::{info, info_span};
-#[cfg(feature = "trace")]
-use tracing_subscriber::prelude::*;
 
 mod components;
 mod resources;
 mod spatial_hash;
 mod systems;
-
-fn init_world(world: &mut World) {
-    world.insert_resource(spatial_hash::SpatialHash::new(96.0));
-    world.insert_resource(Messages::<ResizeEvent>::default());
-    world.insert_resource(DebugSettings {
-        origins: false,
-        colliders: false,
-    });
-    world.init_resource::<LayerTextures>();
-
-    world.insert_resource(WindowSize(Vector2i { x: 1024, y: 768 }));
-    world.insert_resource(WindowResource(
-        WindowBuilder::new(1024, 768, "RustyRay")
-            .set_fps(60)
-            .set_config_flags(
-                ConfigFlag::WindowHighdpi | ConfigFlag::WindowResizable | ConfigFlag::VsyncHint,
-            )
-            .build()
-            .unwrap(),
-    ));
-    world.spawn((
-        Camera(Camera2D {
-            offset: Vector2 {
-                x: 1024. / 2.,
-                y: 768. / 2.,
-            },
-            ..Default::default()
-        }),
-        ActiveCamera,
-    ));
-}
-
-fn cleanup_world(world: &mut World) {
-    // Make sure we remove this now, because we can't be sure when the WindowResource is removed and that will close out the window so this will fail
-    world.remove_resource::<LayerTextures>();
-}
 
 #[derive(ScheduleLabel, Hash, PartialEq, Eq, Debug, Clone)]
 struct Update;
@@ -86,36 +48,36 @@ fn main() {
     let mut last_physics_update_schedule = bevy_ecs::schedule::Schedule::new(LastPhysicsUpdate);
     let mut pre_render_schedule = bevy_ecs::schedule::Schedule::new(PreRender);
     let mut render_schedule = bevy_ecs::schedule::Schedule::new(Render);
+
+    // update_schedule.add_systems(());
+
+    first_physics_update_schedule.add_systems(ensure_global_transform_system);
+    pre_physics_update_schedule.add_systems((sync_collider_with_sprite_system,).chain());
+    physics_update_schedule.add_systems(move_player_system);
+    post_physics_update_schedule
+        .add_systems((apply_velocity_system, update_global_transforms_system).chain());
+    last_physics_update_schedule.add_systems(
+        (
+            sync_collider_with_sprite_system,
+            update_spatial_hash_system,
+            update_on_screen_system,
+        )
+            .chain(),
+    );
+
     render_schedule.set_executor_kind(bevy_ecs::schedule::ExecutorKind::SingleThreaded);
     // pre_render_schedule.set_executor_kind(bevy_ecs::schedule::ExecutorKind::SingleThreaded);
     render_schedule.add_systems((
+        check_for_resize_system,
         update_render_textures_size_system,
         render_layers,
         render_system,
     ));
-    pre_render_schedule.add_systems(update_camera_offset);
-    first_physics_update_schedule.add_systems(ensure_global_transform_system);
-    pre_physics_update_schedule.add_systems(
-        (
-            update_global_transforms_system,
-            sync_collider_with_sprite_system,
-        )
-            .chain(),
-    );
-    physics_update_schedule.add_systems(move_player_system);
-    post_physics_update_schedule.add_systems(apply_velocity_system);
-    last_physics_update_schedule.add_systems(
-        (
-            update_global_transforms_system,
-            (update_spatial_hash_system, update_on_screen_system).chain(),
-        )
-            .chain(),
-    );
-    update_schedule.add_systems((
+    pre_render_schedule.add_systems((
+        update_camera_offset,
         move_camera_to_target_system,
         update_count_text_system,
         update_on_screen_text_system,
-        check_for_resize_system,
         debug_toggle_system,
     ));
 
@@ -221,23 +183,11 @@ fn main() {
         OnScreenText,
     ));
 
-    let mut time = Time::new(60.0);
+    let mut physics_time = Time::new(60.0);
     world.insert_resource(Metrics::default());
     let mut window = world.resource::<WindowResource>();
     loop {
         let frame_time = window.frame_time();
-        time.accumulator += frame_time;
-        while time.accumulator >= time.delta {
-            #[cfg(feature = "trace")]
-            let _span = info_span!("physics loop").entered();
-            world.insert_resource(time);
-            first_physics_update_schedule.run(&mut world);
-            pre_physics_update_schedule.run(&mut world);
-            physics_update_schedule.run(&mut world);
-            post_physics_update_schedule.run(&mut world);
-            last_physics_update_schedule.run(&mut world);
-            time.accumulator -= time.delta
-        }
         world.insert_resource(Time {
             delta: frame_time,
             accumulator: 0.0,
@@ -246,6 +196,18 @@ fn main() {
             #[cfg(feature = "trace")]
             let _span = info_span!("update").entered();
             update_schedule.run(&mut world);
+        }
+        physics_time.accumulator += frame_time;
+        while physics_time.accumulator >= physics_time.delta {
+            #[cfg(feature = "trace")]
+            let _span = info_span!("physics loop").entered();
+            world.insert_resource(physics_time);
+            first_physics_update_schedule.run(&mut world);
+            pre_physics_update_schedule.run(&mut world);
+            physics_update_schedule.run(&mut world);
+            post_physics_update_schedule.run(&mut world);
+            last_physics_update_schedule.run(&mut world);
+            physics_time.accumulator -= physics_time.delta
         }
         {
             #[cfg(feature = "trace")]
@@ -265,6 +227,42 @@ fn main() {
     }
 
     cleanup_world(&mut world);
+}
+
+fn init_world(world: &mut World) {
+    world.insert_resource(spatial_hash::SpatialHash::new(96.0));
+    world.insert_resource(Messages::<ResizeEvent>::default());
+    world.insert_resource(DebugSettings {
+        origins: false,
+        colliders: false,
+    });
+    world.init_resource::<LayerTextures>();
+
+    world.insert_resource(WindowSize(Vector2i { x: 1024, y: 768 }));
+    world.insert_resource(WindowResource(
+        WindowBuilder::new(1024, 768, "RustyRay")
+            .set_fps(60)
+            .set_config_flags(
+                ConfigFlag::WindowHighdpi | ConfigFlag::WindowResizable | ConfigFlag::VsyncHint,
+            )
+            .build()
+            .unwrap(),
+    ));
+    world.spawn((
+        Camera(Camera2D {
+            offset: Vector2 {
+                x: 1024. / 2.,
+                y: 768. / 2.,
+            },
+            ..Default::default()
+        }),
+        ActiveCamera,
+    ));
+}
+
+fn cleanup_world(world: &mut World) {
+    // Make sure we remove this now, because we can't be sure when the WindowResource is removed and that will close out the window so this will fail
+    world.remove_resource::<LayerTextures>();
 }
 
 fn render_system(
@@ -437,7 +435,15 @@ fn render_layers(
                     }
                 }
                 if debug_settings.origins {
-                    d.draw_circle(transform.position, 4.0, Color::BLUE);
+                    d.draw_rect(
+                        Rectangle {
+                            x: transform.position.x,
+                            y: transform.position.y,
+                            width: 4.0,
+                            height: 4.0,
+                        },
+                        Color::BLUE,
+                    );
                 }
             }
 
@@ -446,13 +452,14 @@ fn render_layers(
                     let pos = transform.position - collider.offset;
                     match collider.kind {
                         ColliderKind::Rectangle(size) => {
-                            d.draw_rect_lines(
+                            d.draw_rect_lines_ex(
                                 Rectangle {
                                     x: pos.x,
                                     y: pos.y,
                                     width: size.x,
                                     height: size.y,
                                 },
+                                1.0,
                                 Color::ORANGE,
                             );
                         }
